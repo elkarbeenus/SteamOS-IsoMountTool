@@ -103,5 +103,5 @@ See [CHANGELOG.md](CHANGELOG.md) – every release lists its changes.
 ## Releasing (maintainers)
 
 1. Bump the version in `VERSION` and add a new section to `CHANGELOG.md` (`## [x.y.z] – date`).
-2. Commit, then tag and push: `git tag vx.y.z && git push origin main vx.y.z`
-3. GitHub Actions builds the AppImage and publishes the release, using that version's CHANGELOG section as release notes.
+2. Commit and push to `main`.
+3. GitHub Actions builds the AppImage and, if there is no release for that version yet, creates the tag `vx.y.z` and publishes the release, using that version's CHANGELOG section as release notes. Installed copies pick the update up through the auto update.
