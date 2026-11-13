@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=SteamOS ISO Mount Tool
+Name[de]=SteamOS ISO-Mount-Tool
+GenericName=ISO Mounter
+GenericName[de]=ISO-Einbinder
+Comment=Mount and eject up to 4 ISO images
+Comment[de]=Bis zu 4 ISO-Abbilder einbinden und auswerfen
+Exec=steamos-isomounttool
+Icon=steamos-isomounttool
+Terminal=false
+Categories=Utility;System;
+Keywords=iso;mount;image;disc;cd;dvd;steamos;

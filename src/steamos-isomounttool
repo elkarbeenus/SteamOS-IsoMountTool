@@ -1,0 +1,741 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  SteamOS ISO Mount Tool
+#  Mount and eject up to 4 ISO images on SteamOS (Desktop Mode) – no sudo needed.
+#
+#  Created by Dominic Lesina x Claude
+#  https://github.com/elkarbeenus/SteamOS-IsoMountTool
+# =============================================================================
+
+set -u
+
+APP_ID="steamos-isomounttool"
+APP_NAME="SteamOS ISO Mount Tool"
+REPO="elkarbeenus/SteamOS-IsoMountTool"
+REPO_URL="https://github.com/${REPO}"
+API_LATEST="https://api.github.com/repos/${REPO}/releases/latest"
+MAX_ISOS=4
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# --- Version -----------------------------------------------------------------
+APP_VERSION="0.0.0-dev"
+for _vf in "$SCRIPT_DIR/../share/$APP_ID/VERSION" "$SCRIPT_DIR/../VERSION"; do
+    if [[ -r "$_vf" ]]; then
+        APP_VERSION="$(tr -d '[:space:]' < "$_vf")"
+        break
+    fi
+done
+unset _vf
+
+# --- Paths (overridable for testing) -----------------------------------------
+SYS_BLOCK="${ISOMOUNT_SYSBLOCK:-/sys/block}"
+PROC_MOUNTS="${ISOMOUNT_PROC_MOUNTS:-/proc/mounts}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_ID"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# --- Settings (defaults) -----------------------------------------------------
+UI_LANG=""
+LANG_PREF=""      # explicitly chosen language (saved), empty = follow system
+AUTO_UPDATE="1"
+LAST_DIR="$HOME"
+
+load_config() {
+    [[ -r "$CONFIG_FILE" ]] || return 0
+    local key value
+    while IFS='=' read -r key value; do
+        case "$key" in
+            UI_LANG)     [[ "$value" == de || "$value" == en ]] && LANG_PREF="$value" ;;
+            AUTO_UPDATE) [[ "$value" == 0 || "$value" == 1 ]] && AUTO_UPDATE="$value" ;;
+            LAST_DIR)    [[ -n "$value" ]] && LAST_DIR="$value" ;;
+        esac
+    done < "$CONFIG_FILE"
+}
+
+save_config() {
+    mkdir -p "$CONFIG_DIR" 2>/dev/null || return 0
+    {
+        printf 'UI_LANG=%s\n' "$LANG_PREF"
+        printf 'AUTO_UPDATE=%s\n' "$AUTO_UPDATE"
+        printf 'LAST_DIR=%s\n' "$LAST_DIR"
+    } > "$CONFIG_FILE" 2>/dev/null || true
+}
+
+detect_lang() {
+    if [[ -n "$LANG_PREF" ]]; then UI_LANG="$LANG_PREF"; return; fi
+    case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
+        de*) UI_LANG="de" ;;
+        *)   UI_LANG="en" ;;
+    esac
+}
+
+# =============================================================================
+#  Translations
+# =============================================================================
+declare -A T_EN T_DE
+
+T_EN[menu_text]="Mounted ISOs (%s/%s):"
+T_DE[menu_text]="Eingebundene ISOs (%s/%s):"
+T_EN[none_mounted]="No ISO mounted yet."
+T_DE[none_mounted]="Noch keine ISO eingebunden."
+T_EN[choose]="What do you want to do?"
+T_DE[choose]="Was möchtest du tun?"
+T_EN[opt_mount]="Mount ISO…"
+T_DE[opt_mount]="ISO einbinden…"
+T_EN[opt_eject]="Eject ISO…"
+T_DE[opt_eject]="ISO auswerfen…"
+T_EN[opt_eject_all]="Eject all ISOs"
+T_DE[opt_eject_all]="Alle ISOs auswerfen"
+T_EN[opt_open]="Open mounted ISO in file manager…"
+T_DE[opt_open]="Eingebundene ISO im Dateimanager öffnen…"
+T_EN[opt_lang]="Sprache: Deutsch"
+T_DE[opt_lang]="Language: English"
+T_EN[opt_autoupd_on]="Auto update: ON (click to turn off)"
+T_DE[opt_autoupd_on]="Auto-Update: AN (klicken zum Ausschalten)"
+T_EN[opt_autoupd_off]="Auto update: OFF (click to turn on)"
+T_DE[opt_autoupd_off]="Auto-Update: AUS (klicken zum Einschalten)"
+T_EN[opt_update]="Check for updates now"
+T_DE[opt_update]="Jetzt nach Updates suchen"
+T_EN[opt_about]="About"
+T_DE[opt_about]="Über"
+T_EN[opt_quit]="Quit"
+T_DE[opt_quit]="Beenden"
+T_EN[option]="Option"
+T_DE[option]="Option"
+
+T_EN[pick_iso]="Choose an ISO file"
+T_DE[pick_iso]="ISO-Datei auswählen"
+T_EN[iso_filter]="ISO images"
+T_DE[iso_filter]="ISO-Abbilder"
+T_EN[all_files]="All files"
+T_DE[all_files]="Alle Dateien"
+T_EN[limit]="You can mount at most %s ISOs at the same time.\n\nPlease eject one first."
+T_DE[limit]="Es können höchstens %s ISOs gleichzeitig eingebunden sein.\n\nBitte wirf zuerst eine aus."
+T_EN[not_iso]="This is not an .iso file:\n%s"
+T_DE[not_iso]="Das ist keine .iso-Datei:\n%s"
+T_EN[not_found]="File not found:\n%s"
+T_DE[not_found]="Datei nicht gefunden:\n%s"
+T_EN[already]="This ISO is already mounted:\n%s"
+T_DE[already]="Diese ISO ist bereits eingebunden:\n%s"
+T_EN[err_loop]="Could not set up the ISO as a loop device."
+T_DE[err_loop]="Die ISO konnte nicht als Loop-Gerät eingerichtet werden."
+T_EN[err_mount]="The ISO could not be mounted."
+T_DE[err_mount]="Die ISO konnte nicht eingebunden werden."
+T_EN[mounted_ok]="ISO mounted successfully!\n\n%s\n\nLocation:\n%s"
+T_DE[mounted_ok]="ISO erfolgreich eingebunden!\n\n%s\n\nOrt:\n%s"
+T_EN[open_now]="Open in file manager"
+T_DE[open_now]="Im Dateimanager öffnen"
+T_EN[close]="Close"
+T_DE[close]="Schließen"
+T_EN[eject_title]="Eject ISO"
+T_DE[eject_title]="ISO auswerfen"
+T_EN[eject_text]="Select the ISO(s) to eject:"
+T_DE[eject_text]="Wähle die ISO(s), die ausgeworfen werden sollen:"
+T_EN[open_text]="Select the ISO to open:"
+T_DE[open_text]="Wähle die ISO, die geöffnet werden soll:"
+T_EN[nothing]="No ISO is mounted."
+T_DE[nothing]="Es ist keine ISO eingebunden."
+T_EN[ejected_ok]="Ejected:\n%s"
+T_DE[ejected_ok]="Ausgeworfen:\n%s"
+T_EN[eject_fail]="Could not eject:\n%s\n\nIs a program or file manager window still using it? Close it and try again.\n\n%s"
+T_DE[eject_fail]="Konnte nicht ausgeworfen werden:\n%s\n\nWird die ISO noch von einem Programm oder Dateimanager-Fenster benutzt? Schließe es und versuche es erneut.\n\n%s"
+T_EN[confirm_all]="Eject all %s mounted ISOs?"
+T_DE[confirm_all]="Alle %s eingebundenen ISOs auswerfen?"
+T_EN[yes]="Yes"
+T_DE[yes]="Ja"
+T_EN[no]="No"
+T_DE[no]="Nein"
+T_EN[not_mounted_mp]="(not mounted)"
+T_DE[not_mounted_mp]="(nicht eingehängt)"
+T_EN[no_udisks]="'udisksctl' was not found. It is required to mount ISOs without root rights."
+T_DE[no_udisks]="'udisksctl' wurde nicht gefunden. Es wird benötigt, um ISOs ohne Root-Rechte einzubinden."
+
+T_EN[upd_title]="Update available"
+T_DE[upd_title]="Update verfügbar"
+T_EN[upd_text]="A new version is available!\n\nInstalled: %s\nNew: %s\n\nWhat's new:\n%s\n\nUpdate now?"
+T_DE[upd_text]="Eine neue Version ist verfügbar!\n\nInstalliert: %s\nNeu: %s\n\nNeuerungen:\n%s\n\nJetzt aktualisieren?"
+T_EN[upd_now]="Update now"
+T_DE[upd_now]="Jetzt aktualisieren"
+T_EN[upd_later]="Keep current version"
+T_DE[upd_later]="Alte Version behalten"
+T_EN[upd_none]="You are using the latest version (%s)."
+T_DE[upd_none]="Du verwendest die neueste Version (%s)."
+T_EN[upd_fail_check]="Could not check for updates. Are you online?"
+T_DE[upd_fail_check]="Konnte nicht nach Updates suchen. Bist du online?"
+T_EN[upd_fail_dl]="The update could not be downloaded."
+T_DE[upd_fail_dl]="Das Update konnte nicht heruntergeladen werden."
+T_EN[upd_done]="Updated to version %s. The tool will now restart."
+T_DE[upd_done]="Auf Version %s aktualisiert. Das Tool startet jetzt neu."
+T_EN[upd_manual]="This copy cannot update itself (not running as AppImage or no write permission).\n\nThe release page will be opened instead."
+T_DE[upd_manual]="Diese Kopie kann sich nicht selbst aktualisieren (läuft nicht als AppImage oder keine Schreibrechte).\n\nStattdessen wird die Release-Seite geöffnet."
+
+T_EN[about]="%s\nVersion %s\n\nMount and eject up to %s ISO images on SteamOS – no sudo needed.\n\nCreated by Dominic Lesina x Claude\n\n%s"
+T_DE[about]="%s\nVersion %s\n\nBis zu %s ISO-Abbilder unter SteamOS einbinden und auswerfen – ganz ohne sudo.\n\nErstellt von Dominic Lesina x Claude\n\n%s"
+T_EN[no_ui]="Neither zenity nor kdialog was found. Please run with --help for command line usage."
+T_DE[no_ui]="Weder zenity noch kdialog wurde gefunden. Starte mit --help für die Kommandozeilen-Nutzung."
+
+t() {
+    local k="$1"
+    if [[ "$UI_LANG" == de ]]; then
+        printf '%s' "${T_DE[$k]:-${T_EN[$k]:-$k}}"
+    else
+        printf '%s' "${T_EN[$k]:-$k}"
+    fi
+}
+
+# tf KEY ARGS... -> formatted + escape sequences (\n) expanded
+tf() {
+    local k="$1"; shift
+    # shellcheck disable=SC2059
+    printf "$(t "$k")" "$@"
+}
+
+# =============================================================================
+#  UI abstraction (zenity preferred, kdialog fallback, plain text for CLI)
+# =============================================================================
+UI="${ISOMOUNT_UI:-}"
+if [[ -z "$UI" ]]; then
+    if command -v zenity >/dev/null 2>&1; then UI="zenity"
+    elif command -v kdialog >/dev/null 2>&1; then UI="kdialog"
+    else UI="cli"; fi
+fi
+
+# Escape text for Pango markup (zenity)
+esc() {
+    local s="$1"
+    s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"
+    printf '%s' "$s"
+}
+
+ui_info() {
+    case "$UI" in
+        zenity)  zenity --info --title="$APP_NAME" --width=420 --text="$(esc "$1")" 2>/dev/null ;;
+        kdialog) kdialog --title "$APP_NAME" --msgbox "$1" 2>/dev/null ;;
+        *)       printf '%s\n' "$1" ;;
+    esac
+}
+
+ui_error() {
+    case "$UI" in
+        zenity)  zenity --error --title="$APP_NAME" --width=440 --text="$(esc "$1")" 2>/dev/null ;;
+        kdialog) kdialog --title "$APP_NAME" --error "$1" 2>/dev/null ;;
+        *)       printf 'ERROR: %s\n' "$1" >&2 ;;
+    esac
+}
+
+# ui_question TEXT [YES_LABEL] [NO_LABEL] -> exit status 0 = yes
+ui_question() {
+    local text="$1" yes="${2:-$(t yes)}" no="${3:-$(t no)}"
+    case "$UI" in
+        zenity)  zenity --question --title="$APP_NAME" --width=460 --text="$(esc "$text")" \
+                     --ok-label="$yes" --cancel-label="$no" 2>/dev/null ;;
+        kdialog) kdialog --title "$APP_NAME" --yes-label "$yes" --no-label "$no" --yesno "$text" 2>/dev/null ;;
+        *)       local a; printf '%s [y/N] ' "$text"; read -r a; [[ "$a" == [yYjJ]* ]] ;;
+    esac
+}
+
+# ui_menu TEXT ID LABEL [ID LABEL]...  -> prints chosen ID
+ui_menu() {
+    local text="$1"; shift
+    case "$UI" in
+        zenity)
+            zenity --list --title="$APP_NAME" --text="$(esc "$text")" \
+                --column=id --column="$(t option)" --hide-column=1 --print-column=1 \
+                --hide-header --width=560 --height=500 "$@" 2>/dev/null | cut -d'|' -f1
+            ;;
+        kdialog)
+            kdialog --title "$APP_NAME" --menu "$text" "$@" 2>/dev/null
+            ;;
+        *)
+            local -a ids=() ; local i=1 a
+            printf '%s\n' "$text"
+            while (( $# >= 2 )); do ids+=("$1"); printf '  %d) %s\n' "$i" "$2"; shift 2; ((i++)); done
+            printf '> '; read -r a
+            [[ "$a" =~ ^[0-9]+$ ]] && (( a >= 1 && a <= ${#ids[@]} )) && printf '%s\n' "${ids[a-1]}"
+            ;;
+    esac
+}
+
+# ui_checklist TEXT ID LABEL [ID LABEL]... -> prints chosen IDs, one per line
+ui_checklist() {
+    local text="$1"; shift
+    local -a args=()
+    case "$UI" in
+        zenity)
+            while (( $# >= 2 )); do args+=(FALSE "$1" "$2"); shift 2; done
+            zenity --list --checklist --title="$APP_NAME" --text="$(esc "$text")" \
+                --column="✔" --column=id --column="ISO" --hide-column=2 --print-column=2 \
+                --separator=$'\n' --width=620 --height=360 "${args[@]}" 2>/dev/null
+            ;;
+        kdialog)
+            while (( $# >= 2 )); do args+=("$1" "$2" off); shift 2; done
+            kdialog --title "$APP_NAME" --separate-output --checklist "$text" "${args[@]}" 2>/dev/null
+            ;;
+        *)
+            local -a ids=(); local i=1 a n
+            printf '%s\n' "$text"
+            while (( $# >= 2 )); do ids+=("$1"); printf '  %d) %s\n' "$i" "$2"; shift 2; ((i++)); done
+            printf '(numbers separated by spaces) > '; read -r a
+            for n in $a; do
+                [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#ids[@]} )) && printf '%s\n' "${ids[n-1]}"
+            done
+            ;;
+    esac
+}
+
+# ui_pick_iso -> prints chosen path
+ui_pick_iso() {
+    local start="$LAST_DIR"
+    [[ -d "$start" ]] || start="$HOME"
+    case "$UI" in
+        zenity)
+            zenity --file-selection --title="$(t pick_iso)" --filename="${start%/}/" \
+                --file-filter="$(t iso_filter) (*.iso) | *.iso *.ISO *.Iso" \
+                --file-filter="$(t all_files) | *" 2>/dev/null
+            ;;
+        kdialog)
+            kdialog --title "$(t pick_iso)" --getopenfilename "$start" \
+                "*.iso *.ISO *.Iso|$(t iso_filter) (*.iso)" 2>/dev/null
+            ;;
+        *)
+            local a; printf '%s: ' "$(t pick_iso)"; read -r a; printf '%s\n' "$a"
+            ;;
+    esac
+}
+
+open_path() {
+    local p="$1"
+    if command -v xdg-open >/dev/null 2>&1; then
+        (xdg-open "$p" >/dev/null 2>&1 &)
+    elif command -v dolphin >/dev/null 2>&1; then
+        (dolphin "$p" >/dev/null 2>&1 &)
+    fi
+}
+
+# =============================================================================
+#  ISO / loop device handling
+# =============================================================================
+
+# Prints "LOOPDEV<TAB>BACKING_FILE" for every loop device backed by an .iso file
+list_iso_loops() {
+    local f bf dev
+    for f in "$SYS_BLOCK"/loop*/loop/backing_file; do
+        [[ -r "$f" ]] || continue
+        bf="$(<"$f")"
+        bf="${bf% (deleted)}"
+        [[ "${bf,,}" == *.iso ]] || continue
+        dev="/dev/$(basename "$(dirname "$(dirname "$f")")")"
+        printf '%s\t%s\n' "$dev" "$bf"
+    done
+}
+
+count_isos() {
+    local n=0 line
+    while IFS= read -r line; do [[ -n "$line" ]] && ((n++)); done < <(list_iso_loops)
+    printf '%s' "$n"
+}
+
+# Prints mounted devices (loop itself or its partitions) for a loop device
+mounted_sources_of() {
+    local loop="$1"
+    awk -v d="$loop" '($1 == d || index($1, d "p") == 1) { print $1 }' "$PROC_MOUNTS" 2>/dev/null
+}
+
+# Prints mount points (decoded) for a loop device
+mountpoints_of() {
+    local loop="$1" m
+    while IFS= read -r m; do
+        [[ -n "$m" ]] && printf '%b\n' "$m"
+    done < <(awk -v d="$loop" '($1 == d || index($1, d "p") == 1) { print $2 }' "$PROC_MOUNTS" 2>/dev/null)
+}
+
+first_mountpoint() {
+    mountpoints_of "$1" | head -n1
+}
+
+backing_of() {
+    list_iso_loops | awk -F'\t' -v d="$1" '$1 == d { print $2; exit }'
+}
+
+require_udisks() {
+    if ! command -v udisksctl >/dev/null 2>&1; then
+        ui_error "$(t no_udisks)"
+        return 1
+    fi
+}
+
+# mount_iso PATH -> 0 on success, prints nothing; shows dialogs
+mount_iso() {
+    local iso="$1" out loop mp targets dev errs="" n
+
+    require_udisks || return 1
+
+    if [[ ! -f "$iso" ]]; then
+        ui_error "$(tf not_found "$iso")"; return 1
+    fi
+    iso="$(readlink -f "$iso")"
+    if [[ "${iso,,}" != *.iso ]]; then
+        ui_error "$(tf not_iso "$iso")"; return 1
+    fi
+
+    if list_iso_loops | cut -f2 | grep -Fxq -- "$iso"; then
+        ui_info "$(tf already "$iso")"; return 0
+    fi
+
+    n="$(count_isos)"
+    if (( n >= MAX_ISOS )); then
+        ui_error "$(tf limit "$MAX_ISOS")"; return 1
+    fi
+
+    LAST_DIR="$(dirname "$iso")"; save_config
+
+    out="$(udisksctl loop-setup --read-only --file "$iso" 2>&1)"
+    loop="$(grep -o '/dev/loop[0-9]\+' <<<"$out" | head -n1)"
+    if [[ -z "$loop" ]]; then
+        ui_error "$(t err_loop)"$'\n\n'"$out"; return 1
+    fi
+
+    # Some desktops auto-mount new devices – give them a moment.
+    for _ in 1 2 3 4; do
+        [[ -n "$(first_mountpoint "$loop")" ]] && break
+        sleep 0.5
+    done
+
+    if [[ -z "$(first_mountpoint "$loop")" ]]; then
+        # Hybrid ISOs may contain partitions; mount every partition with a filesystem.
+        targets="$(lsblk -nrpo NAME,FSTYPE "$loop" 2>/dev/null | awk '$2 != "" { print $1 }')"
+        [[ -n "$targets" ]] || targets="$loop"
+        while IFS= read -r dev; do
+            [[ -n "$dev" ]] || continue
+            out="$(udisksctl mount --block-device "$dev" 2>&1)" || errs+="$out"$'\n'
+        done <<<"$targets"
+    fi
+
+    mp="$(mountpoints_of "$loop")"
+    if [[ -z "$mp" ]]; then
+        udisksctl loop-delete --block-device "$loop" >/dev/null 2>&1
+        ui_error "$(t err_mount)"$'\n\n'"$errs"; return 1
+    fi
+
+    if [[ "$UI" == cli ]]; then
+        printf '%s\n' "$(tf mounted_ok "$(basename "$iso")" "$mp")"
+    elif ui_question "$(tf mounted_ok "$(basename "$iso")" "$mp")" "$(t open_now)" "$(t close)"; then
+        open_path "$(head -n1 <<<"$mp")"
+    fi
+    return 0
+}
+
+# eject_loop LOOPDEV -> 0 ok; on error prints message to stdout
+eject_loop() {
+    local loop="$1" src out err=""
+    while IFS= read -r src; do
+        [[ -n "$src" ]] || continue
+        out="$(udisksctl unmount --block-device "$src" 2>&1)" || err+="$out"$'\n'
+    done < <(mounted_sources_of "$loop")
+    if [[ -z "$err" ]]; then
+        out="$(udisksctl loop-delete --block-device "$loop" 2>&1)" || err+="$out"$'\n'
+    fi
+    if [[ -n "$err" ]]; then
+        printf '%s' "$err"
+        return 1
+    fi
+    return 0
+}
+
+# eject_many LOOPDEV... -> shows a summary dialog
+eject_many() {
+    local loop name ok="" fail="" fail_msg="" msg
+    require_udisks || return 1
+    for loop in "$@"; do
+        [[ -n "$loop" ]] || continue
+        name="$(basename "$(backing_of "$loop")")"
+        [[ -n "$name" ]] || name="$loop"
+        if msg="$(eject_loop "$loop")"; then
+            ok+="• $name"$'\n'
+        else
+            fail+="• $name"$'\n'
+            fail_msg+="$msg"
+        fi
+    done
+    [[ -n "$ok" ]]   && ui_info "$(tf ejected_ok "$ok")"
+    [[ -n "$fail" ]] && ui_error "$(tf eject_fail "$fail" "$fail_msg")"
+    [[ -z "$fail" ]]
+}
+
+# Builds "ID LABEL" pairs for every mounted ISO into the global array PAIRS
+build_pairs() {
+    PAIRS=()
+    local dev bf mp
+    while IFS=$'\t' read -r dev bf; do
+        [[ -n "$dev" ]] || continue
+        mp="$(first_mountpoint "$dev")"
+        [[ -n "$mp" ]] || mp="$(t not_mounted_mp)"
+        PAIRS+=("$dev" "$(basename "$bf")  →  $mp")
+    done < <(list_iso_loops)
+}
+
+# =============================================================================
+#  Actions
+# =============================================================================
+action_mount() {
+    local n iso
+    n="$(count_isos)"
+    if (( n >= MAX_ISOS )); then
+        ui_error "$(tf limit "$MAX_ISOS")"; return
+    fi
+    iso="$(ui_pick_iso)" || return
+    [[ -n "$iso" ]] || return
+    mount_iso "$iso"
+}
+
+action_eject() {
+    local -a sel=()
+    build_pairs
+    if (( ${#PAIRS[@]} == 0 )); then ui_info "$(t nothing)"; return; fi
+    mapfile -t sel < <(ui_checklist "$(t eject_text)" "${PAIRS[@]}")
+    (( ${#sel[@]} )) || return
+    eject_many "${sel[@]}"
+}
+
+action_eject_all() {
+    local -a loops=()
+    mapfile -t loops < <(list_iso_loops | cut -f1)
+    if (( ${#loops[@]} == 0 )); then ui_info "$(t nothing)"; return; fi
+    if [[ "$UI" == cli ]] || ui_question "$(tf confirm_all "${#loops[@]}")"; then
+        eject_many "${loops[@]}"
+    fi
+}
+
+action_open() {
+    local sel mp
+    build_pairs
+    if (( ${#PAIRS[@]} == 0 )); then ui_info "$(t nothing)"; return; fi
+    if (( ${#PAIRS[@]} == 2 )); then
+        sel="${PAIRS[0]}"
+    else
+        sel="$(ui_menu "$(t open_text)" "${PAIRS[@]}")" || return
+    fi
+    [[ -n "$sel" ]] || return
+    mp="$(first_mountpoint "$sel")"
+    [[ -n "$mp" ]] && open_path "$mp"
+}
+
+action_about() {
+    ui_info "$(tf about "$APP_NAME" "$APP_VERSION" "$MAX_ISOS" "$REPO_URL")"
+}
+
+# =============================================================================
+#  Auto update (checks GitHub releases of this repository)
+# =============================================================================
+
+# version_gt A B -> true if A > B
+version_gt() {
+    [[ "$1" != "$2" ]] && [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" == "$1" ]]
+}
+
+# Prints: line1 = tag, line2 = AppImage URL, rest = release notes
+fetch_latest_release() {
+    local json
+    command -v curl >/dev/null 2>&1 || return 1
+    json="$(curl -fsSL --max-time 8 -H 'Accept: application/vnd.github+json' \
+        -H "User-Agent: $APP_ID/$APP_VERSION" "$API_LATEST" 2>/dev/null)" || return 1
+    [[ -n "$json" ]] || return 1
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+url = ""
+for a in d.get("assets", []):
+    if a.get("name", "").endswith(".AppImage"):
+        url = a.get("browser_download_url", "")
+        break
+print(d.get("tag_name", ""))
+print(url)
+print(d.get("body") or "")
+' <<<"$json" 2>/dev/null
+    else
+        grep -o '"tag_name": *"[^"]*"' <<<"$json" | head -n1 | sed 's/.*"\([^"]*\)"$/\1/'
+        grep -o '"browser_download_url": *"[^"]*\.AppImage"' <<<"$json" | head -n1 | sed 's/.*"\([^"]*\)"$/\1/'
+        printf '%s\n' "-"
+    fi
+}
+
+perform_update() {
+    local url="$1" new_version="$2" target tmp
+    target="${APPIMAGE:-}"
+    if [[ -z "$target" || -z "$url" || ! -w "$target" || ! -w "$(dirname "$target")" ]]; then
+        ui_info "$(t upd_manual)"
+        open_path "$REPO_URL/releases/latest"
+        return 1
+    fi
+    tmp="$target.update.$$"
+    if ! curl -fsSL --max-time 600 -o "$tmp" "$url" 2>/dev/null \
+        || [[ ! -s "$tmp" ]] || [[ "$(head -c4 "$tmp" | tr -d '\0')" != $'\x7fELF' ]]; then
+        rm -f "$tmp"
+        ui_error "$(t upd_fail_dl)"
+        return 1
+    fi
+    chmod +x "$tmp" && mv -f "$tmp" "$target" || { rm -f "$tmp"; ui_error "$(t upd_fail_dl)"; return 1; }
+    ui_info "$(tf upd_done "$new_version")"
+    exec "$target" --no-update-check
+}
+
+# check_update MANUAL(0|1)
+check_update() {
+    local manual="$1" data tag url notes latest
+    if ! data="$(fetch_latest_release)" || [[ -z "$data" ]]; then
+        [[ "$manual" == 1 ]] && ui_error "$(t upd_fail_check)"
+        return 1
+    fi
+    tag="$(sed -n 1p <<<"$data")"
+    url="$(sed -n 2p <<<"$data")"
+    notes="$(sed -n '3,$p' <<<"$data" | head -n 25)"
+    latest="${tag#v}"
+    if [[ -z "$latest" ]]; then
+        [[ "$manual" == 1 ]] && ui_error "$(t upd_fail_check)"
+        return 1
+    fi
+    if version_gt "$latest" "$APP_VERSION"; then
+        if ui_question "$(tf upd_text "$APP_VERSION" "$latest" "$notes")" "$(t upd_now)" "$(t upd_later)"; then
+            perform_update "$url" "$latest"
+        fi
+    elif [[ "$manual" == 1 ]]; then
+        ui_info "$(tf upd_none "$APP_VERSION")"
+    fi
+}
+
+# =============================================================================
+#  Main menu
+# =============================================================================
+status_text() {
+    local n dev bf mp text
+    n="$(count_isos)"
+    text="$(tf menu_text "$n" "$MAX_ISOS")"$'\n'
+    if (( n == 0 )); then
+        text+="  $(t none_mounted)"$'\n'
+    else
+        while IFS=$'\t' read -r dev bf; do
+            [[ -n "$dev" ]] || continue
+            mp="$(first_mountpoint "$dev")"
+            [[ -n "$mp" ]] || mp="$(t not_mounted_mp)"
+            text+="  • $(basename "$bf")  →  $mp"$'\n'
+        done < <(list_iso_loops)
+    fi
+    text+=$'\n'"$(t choose)"
+    printf '%s' "$text"
+}
+
+main_menu() {
+    local choice upd_label
+    while true; do
+        if [[ "$AUTO_UPDATE" == 1 ]]; then upd_label="$(t opt_autoupd_on)"; else upd_label="$(t opt_autoupd_off)"; fi
+        choice="$(ui_menu "$(status_text)" \
+            mount     "💿  $(t opt_mount)" \
+            eject     "⏏️  $(t opt_eject)" \
+            eject_all "⏏️  $(t opt_eject_all)" \
+            open      "📂  $(t opt_open)" \
+            lang      "🌐  $(t opt_lang)" \
+            autoupd   "🔄  $upd_label" \
+            update    "⬆️  $(t opt_update)" \
+            about     "ℹ️  $(t opt_about)" \
+            quit      "🚪  $(t opt_quit)")" || break
+        case "$choice" in
+            mount)     action_mount ;;
+            eject)     action_eject ;;
+            eject_all) action_eject_all ;;
+            open)      action_open ;;
+            lang)      if [[ "$UI_LANG" == de ]]; then UI_LANG=en; else UI_LANG=de; fi; LANG_PREF="$UI_LANG"; save_config ;;
+            autoupd)   if [[ "$AUTO_UPDATE" == 1 ]]; then AUTO_UPDATE=0; else AUTO_UPDATE=1; fi; save_config ;;
+            update)    check_update 1 ;;
+            about)     action_about ;;
+            quit|"")   break ;;
+        esac
+    done
+}
+
+usage() {
+    cat <<EOF
+$APP_NAME $APP_VERSION
+Created by Dominic Lesina x Claude – $REPO_URL
+
+Usage: $APP_ID [OPTION]
+
+Without options the graphical menu is shown.
+
+  --mount FILE.iso     Mount an ISO file (max. $MAX_ISOS at the same time)
+  --eject FILE|LOOP    Eject a mounted ISO (by ISO path or /dev/loopN)
+  --eject-all          Eject all mounted ISOs
+  --list               List mounted ISOs
+  --check-update       Check for a new release
+  --lang de|en         Set the language (saved)
+  --no-update-check    Skip the automatic update check on start
+  --version            Show version
+  --help               Show this help
+EOF
+}
+
+# =============================================================================
+#  Entry point
+# =============================================================================
+main() {
+    local skip_update=0 arg loop
+    load_config
+
+    # pre-scan for options that change state before anything is shown
+    local -a args=("$@")
+    local i
+    for ((i = 0; i < ${#args[@]}; i++)); do
+        case "${args[i]}" in
+            --no-update-check) skip_update=1 ;;
+            --lang)
+                arg="${args[i+1]:-}"
+                if [[ "$arg" == de || "$arg" == en ]]; then LANG_PREF="$arg"; save_config; fi
+                ;;
+        esac
+    done
+    detect_lang
+    [[ "${ISOMOUNT_NO_UPDATE:-0}" == 1 ]] && skip_update=1
+
+    case "${1:-}" in
+        --help|-h)     usage; return 0 ;;
+        --version|-v)  printf '%s %s\n' "$APP_NAME" "$APP_VERSION"; return 0 ;;
+        --list)
+            list_iso_loops | while IFS=$'\t' read -r loop arg; do
+                printf '%s\t%s\t%s\n' "$loop" "$arg" "$(first_mountpoint "$loop")"
+            done
+            return 0 ;;
+        --mount)
+            [[ -n "${2:-}" ]] || { usage; return 2; }
+            mount_iso "$2"; return $? ;;
+        --eject)
+            [[ -n "${2:-}" ]] || { usage; return 2; }
+            if [[ "$2" == /dev/loop* ]]; then
+                loop="$2"
+            else
+                loop="$(list_iso_loops | awk -F'\t' -v f="$(readlink -f "$2")" '$2 == f { print $1; exit }')"
+            fi
+            [[ -n "$loop" ]] || { ui_error "$(t nothing)"; return 1; }
+            eject_many "$loop"; return $? ;;
+        --eject-all)
+            local -a loops=()
+            mapfile -t loops < <(list_iso_loops | cut -f1)
+            (( ${#loops[@]} )) || { ui_info "$(t nothing)"; return 0; }
+            eject_many "${loops[@]}"; return $? ;;
+        --check-update)
+            check_update 1; return $? ;;
+    esac
+
+    if [[ "$UI" == cli && -z "${ISOMOUNT_UI:-}" ]]; then
+        printf '%s\n' "$(t no_ui)" >&2
+    fi
+
+    if [[ "$skip_update" == 0 && "$AUTO_UPDATE" == 1 ]]; then
+        check_update 0
+    fi
+
+    main_menu
+    return 0
+}
+
+main "$@"

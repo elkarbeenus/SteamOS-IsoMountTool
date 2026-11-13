@@ -1,0 +1,4 @@
+#!/bin/sh
+# AppRun for SteamOS ISO Mount Tool – Created by Dominic Lesina x Claude
+HERE="$(dirname "$(readlink -f "$0")")"
+exec bash "$HERE/usr/bin/steamos-isomounttool" "$@"
