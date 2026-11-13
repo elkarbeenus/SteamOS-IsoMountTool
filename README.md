@@ -99,3 +99,9 @@ See [CHANGELOG.md](CHANGELOG.md) – every release lists its changes.
 ## Credits
 
 **Created by Dominic Lesina x Claude**
+
+## Releasing (maintainers)
+
+1. Bump the version in `VERSION` and add a new section to `CHANGELOG.md` (`## [x.y.z] – date`).
+2. Commit, then tag and push: `git tag vx.y.z && git push origin main vx.y.z`
+3. GitHub Actions builds the AppImage and publishes the release, using that version's CHANGELOG section as release notes.

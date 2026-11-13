@@ -1,0 +1,67 @@
+name: Build & Release AppImage
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin file
+
+      - name: Check version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v="$(tr -d '[:space:]' < VERSION)"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "VERSION ($v) does not match tag ($GITHUB_REF_NAME)"; exit 1; }
+
+      - name: Syntax check
+        run: bash -n src/steamos-isomounttool
+
+      - name: Build AppImage
+        run: ./build.sh
+
+      - name: Smoke test
+        run: APPIMAGE_EXTRACT_AND_RUN=1 ./dist/*.AppImage --version
+
+      - name: Release notes from CHANGELOG
+        run: |
+          v="$(tr -d '[:space:]' < VERSION)"
+          {
+            echo "## SteamOS ISO Mount Tool $v"
+            echo
+            awk -v v="$v" '/^## \[/{ f = (index($0, "[" v "]") > 0); next } f' CHANGELOG.md
+            echo
+            echo "### Installation"
+            echo "1. Download \`SteamOS-IsoMountTool-$v-x86_64.AppImage\` below"
+            echo "2. Right-click → Properties → Permissions → **Is executable**"
+            echo "3. Double-click to start"
+            echo
+            echo "Already installed? The tool offers this update automatically on its next start."
+            echo
+            echo "*Created by Dominic Lesina x Claude*"
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.AppImage \
+            --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+
+      - name: Upload artifact (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppImage
+          path: dist/*.AppImage
