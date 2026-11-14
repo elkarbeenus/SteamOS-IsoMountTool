@@ -1018,3 +1018,116 @@ def download_update(url: str, target: str) -> bool:
     except OSError:
         pass
     return False
+
+
+# =============================================================================
+#  LakuenLauncher export
+# =============================================================================
+LAKUEN_ID = "de.lakuen.launcher"
+
+
+def lakuen_dir() -> str:
+    return os.environ.get("ISOMT_LAKUEN_DIR") or os.path.join(
+        os.environ.get("XDG_DATA_HOME") or os.path.join(home(), ".local", "share"), LAKUEN_ID)
+
+
+def lakuen_installed() -> bool:
+    return os.path.isdir(lakuen_dir())
+
+
+def lakuen_running() -> bool:
+    """True if a LakuenLauncher process is running (it would overwrite library.json on its next save)."""
+    proc = os.environ.get("ISOMT_PROC", "/proc")
+    me = str(os.getpid())
+    try:
+        pids = [p for p in os.listdir(proc) if p.isdigit() and p != me]
+    except OSError:
+        return False
+    for pid in pids:
+        try:
+            with open(os.path.join(proc, pid, "cmdline"), "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "ignore").lower()
+        except OSError:
+            continue
+        first = cmd.split(" ", 1)[0]
+        if "lakuenlauncher" in os.path.basename(first) or "lakuenlauncher" in first.rsplit("/", 1)[-1]:
+            return True
+    return False
+
+
+def _lakuen_uid() -> str:
+    import random
+    import string
+    n = int(time.time() * 1000)
+    digits = string.digits + string.ascii_lowercase
+    out = ""
+    while n:
+        n, r = divmod(n, 36)
+        out = digits[r] + out
+    return out + "".join(random.choice(digits) for _ in range(6))
+
+
+def export_to_lakuen(prefix: Prefix, exe: str, name: str, launch_options: str,
+                     proton_path: str = "", use_runtime: bool = True) -> str:
+    """Adds (or updates) the game in LakuenLauncher's library.json. Returns 'added' or 'updated'."""
+    if not lakuen_installed():
+        raise MountError("err_lakuen_missing")
+    if lakuen_running():
+        raise MountError("err_lakuen_running")
+    path = os.path.join(lakuen_dir(), "library.json")
+    lib = {"version": 1, "games": [], "collections": []}
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            raise MountError("err_lakuen_read", str(e))
+        if isinstance(data, dict) and isinstance(data.get("games"), list):
+            lib = data
+        try:
+            shutil.copy2(path, os.path.join(lakuen_dir(), f"library.isomounttool-backup-{int(time.time())}.json"))
+        except OSError:
+            pass
+
+    env, wrapper, args = parse_launch_options(launch_options)
+    fields = {
+        "name": name,
+        "path": exe,
+        "kind": "exe",
+        "args": " ".join(shlex.quote(a) for a in args),
+        "workdir": os.path.dirname(exe),
+        "env": env,
+        "runner": "slr" if use_runtime else "proton",
+        "proton": proton_path or "default",
+        "prefix": prefix.path,
+        "wrapper": " ".join(shlex.quote(w) for w in wrapper),
+    }
+    existing = None
+    for g in lib["games"]:
+        if isinstance(g, dict) and (g.get("path") == exe or
+                                    (prefix.meta.get("lakuen_id") and g.get("id") == prefix.meta.get("lakuen_id"))):
+            existing = g
+            break
+    if existing is not None:
+        existing.update(fields)
+        result, gid = "updated", existing.get("id")
+    else:
+        gid = _lakuen_uid()
+        game = {
+            "id": gid, **fields,
+            "mangohud": None, "gamemode": None, "fsr": False, "preScript": "", "postScript": "",
+            "art": {}, "favorite": False, "hidden": False, "collections": [],
+            "notes": "Importiert aus SteamOS ISO Mount Tool", "addedAt": int(time.time() * 1000), "lastLaunch": 0,
+        }
+        lib["games"].append(game)
+        result = "added"
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(lib, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as e:
+        raise MountError("err_lakuen_write", str(e))
+    prefix.meta["lakuen_id"] = gid
+    prefix.save_meta()
+    return result

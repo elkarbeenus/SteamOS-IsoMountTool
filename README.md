@@ -24,6 +24,7 @@
 - 🗂️ **One prefix per game** – stored in `~/Games/IsoMountTool/<game>`
 - 💽 **Multiple discs** – when the installer asks for disc 2, eject disc 1 and mount disc 2 (it is reachable under `Z:\run\media\…`). Optional, experimental: slots 1–4 as drives **D:–G:** inside the prefix
 - ▶️ **Games & prefixes page** – start the installed game, run any program in its prefix, open drive C:, delete a prefix
+- 🚀 **Send to LakuenLauncher** – one click adds the installed game to [LakuenLauncher](https://github.com/elkarbeenus/Lakuenlauncher) with the same prefix, Proton and launch options
 - 🌐 **German & English**
 - 🔄 **Auto update** – checks this repository for new releases on start and asks whether to update or keep the current version (can be turned off)
 - 🔐 **No root** – mounting uses `udisksctl`, the same way Dolphin mounts drives
@@ -55,6 +56,7 @@
 4. Click **Start** and install the game as usual (to `C:\` inside the prefix).
 5. **Multiple discs?** When the installer asks for the next disc: eject the ISO in the tool, mount the next one and point the installer to it (`Z:\run\media\<user>\<disc>`). If an installer insists on a CD drive, turn on *ISOs as drives D:–G:* in the settings (experimental).
 6. Afterwards, open **Games & prefixes** → **Run program…** and choose the game's `.exe` once. From then on **Play** starts it.
+7. Optional: click **Send to LakuenLauncher** – the game appears in the launcher's library with the same prefix, Proton version and launch options. (Close LakuenLauncher before clicking; the tool tells you if it's still running.)
 
 Logs of every run are stored in `~/.local/share/steamos-isomounttool/logs/`.
 

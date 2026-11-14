@@ -122,6 +122,7 @@ _SVG = {
     "refresh": '<path d="M20 11a8 8 0 0 0-14.6-4.5M4 4v4h4M4 13a8 8 0 0 0 14.6 4.5M20 20v-4h-4"/>',
     "download": '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
     "file": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+    "send": '<path d="M4 12h12M12 6l6 6-6 6"/><path d="M20 4v16"/>',
     "log": '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
 }
 
@@ -700,10 +701,13 @@ class PrefixCard(QFrame):
         openc.clicked.connect(lambda: core.open_path(prefix.drive_c if os.path.isdir(prefix.drive_c) else prefix.path))
         delete = button(t("btn_delete"), "trash", "Danger")
         delete.clicked.connect(lambda: win.delete_prefix(prefix))
+        lakuen = button(t("btn_lakuen"), "send")
+        lakuen.clicked.connect(lambda: win.send_to_lakuen(prefix))
         btns.addWidget(play, 0, 0)
         btns.addWidget(run, 0, 1)
-        btns.addWidget(openc, 1, 0)
-        btns.addWidget(delete, 1, 1)
+        btns.addWidget(lakuen, 1, 0, 1, 2)
+        btns.addWidget(openc, 2, 0)
+        btns.addWidget(delete, 2, 1)
         lay.addLayout(btns)
 
 
@@ -1273,6 +1277,29 @@ class MainWindow(QMainWindow):
     def open_last_log(self):
         if self.last_log:
             core.open_path(self.last_log)
+
+    def send_to_lakuen(self, prefix: core.Prefix):
+        t = self.t
+        exe = prefix.meta.get("last_exe", "")
+        if not exe or not os.path.isfile(exe):
+            start = prefix.drive_c if os.path.isdir(prefix.drive_c) else prefix.path
+            exe, _ = QFileDialog.getOpenFileName(self, t("pick_game_first"), start,
+                                                 "Windows (*.exe *.EXE *.bat);;* (*)")
+            if not exe:
+                return
+            prefix.meta["last_exe"] = exe
+            prefix.save_meta()
+        tool = self._tool(prefix.meta.get("proton_path") or self.cfg.get("proton", "auto"))
+        try:
+            res = core.export_to_lakuen(prefix, exe, prefix.name,
+                                        self.cfg.get("launch_options", core.DEFAULT_LAUNCH_OPTIONS),
+                                        tool.path if tool else "", bool(self.cfg.get("use_runtime", True)))
+        except core.MountError as e:
+            self.error(t(e.key, **e.fmt), e.detail)
+            return
+        QMessageBox.information(self, core.APP_NAME,
+                                t("lakuen_added" if res == "added" else "lakuen_updated", name=prefix.name))
+        self.games_page.refresh()
 
     def delete_prefix(self, prefix: core.Prefix):
         if not self.ask(self.t("confirm_delete", name=prefix.name, path=prefix.path)):

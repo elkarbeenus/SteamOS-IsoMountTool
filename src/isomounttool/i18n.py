@@ -80,6 +80,18 @@ STRINGS = {
                        "Really delete prefix “{name}”?\n\nThe installed game and all save games in it will be deleted!\n\n{path}"),
     "remember_exe": ("Als Spiel für „Spielen“ merken", "Remember as game for “Play”"),
 
+    "btn_lakuen": ("An LakuenLauncher übertragen", "Send to LakuenLauncher"),
+    "lakuen_added": ("„{name}“ ist jetzt im LakuenLauncher. Starte den Launcher – das Spiel steht in deiner Bibliothek, mit demselben Präfix, Proton und deinen Startoptionen.",
+                     "“{name}” is now in LakuenLauncher. Start the launcher – the game is in your library with the same prefix, Proton and launch options."),
+    "lakuen_updated": ("„{name}“ war schon im LakuenLauncher und wurde aktualisiert.", "“{name}” was already in LakuenLauncher and has been updated."),
+    "err_lakuen_missing": ("LakuenLauncher wurde nicht gefunden. Starte ihn einmal, dann klappt die Übertragung.",
+                           "LakuenLauncher was not found. Start it once, then try again."),
+    "err_lakuen_running": ("Der LakuenLauncher läuft gerade. Bitte schließe ihn kurz und klicke dann noch einmal – sonst würde er die Bibliothek beim nächsten Speichern überschreiben.",
+                           "LakuenLauncher is running. Please close it and click again – otherwise it would overwrite its library on its next save."),
+    "err_lakuen_read": ("Die Bibliothek des LakuenLaunchers konnte nicht gelesen werden.", "LakuenLauncher's library could not be read."),
+    "err_lakuen_write": ("Die Bibliothek des LakuenLaunchers konnte nicht gespeichert werden.", "LakuenLauncher's library could not be saved."),
+    "pick_game_first": ("Wähle die .exe des installierten Spiels aus", "Choose the .exe of the installed game"),
+
     # settings
     "set_title": ("Einstellungen", "Settings"),
     "set_language": ("Sprache", "Language"),

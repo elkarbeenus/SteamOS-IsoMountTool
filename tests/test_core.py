@@ -158,6 +158,44 @@ class CoreTests(unittest.TestCase):
         self.assertNotIn("STEAM_COMPAT_LIBRARY_PATHS", env)
         self.assertEqual(env["SteamAppId"], "0")
 
+    def test_export_to_lakuen(self):
+        cfg = core.Config()
+        prefix = core.get_prefix(cfg, "Need for Speed")
+        exe = prefix.meta["last_exe"]
+        lk = os.path.join(self.env["XDG_DATA_HOME"], core.LAKUEN_ID)
+        with self.assertRaises(core.MountError) as cm:
+            core.export_to_lakuen(prefix, exe, prefix.name, core.DEFAULT_LAUNCH_OPTIONS)
+        self.assertEqual(cm.exception.key, "err_lakuen_missing")
+        os.makedirs(lk)
+        import json
+        with open(os.path.join(lk, "library.json"), "w") as f:
+            json.dump({"version": 1, "games": [{"id": "x1", "name": "Other"}], "collections": [{"id": "c"}]}, f)
+        os.environ["ISOMT_PROC"] = os.path.join(self.tmp.name, "noproc")
+        self.assertEqual(core.export_to_lakuen(prefix, exe, prefix.name, "WINE_LARGE_ADDRESS_AWARE=1 %command% -w",
+                                               "/p/Proton 11.0"), "added")
+        with open(os.path.join(lk, "library.json")) as f:
+            lib = json.load(f)
+        self.assertEqual(len(lib["games"]), 2)
+        self.assertEqual(lib["collections"], [{"id": "c"}])
+        g = lib["games"][1]
+        self.assertEqual((g["path"], g["kind"], g["prefix"], g["runner"], g["proton"]),
+                         (exe, "exe", prefix.path, "slr", "/p/Proton 11.0"))
+        self.assertEqual(g["env"], {"WINE_LARGE_ADDRESS_AWARE": "1"})
+        self.assertEqual(g["args"], "-w")
+        self.assertEqual(core.export_to_lakuen(prefix, exe, prefix.name, ""), "updated")
+        with open(os.path.join(lk, "library.json")) as f:
+            self.assertEqual(len(json.load(f)["games"]), 2)
+        # running launcher is detected
+        fake = os.path.join(self.tmp.name, "proc", "4242")
+        os.makedirs(fake)
+        with open(os.path.join(fake, "cmdline"), "wb") as f:
+            f.write(b"/tmp/.mount_Lakuen/usr/bin/lakuenlauncher\0")
+        os.environ["ISOMT_PROC"] = os.path.join(self.tmp.name, "proc")
+        self.assertTrue(core.lakuen_running())
+        with self.assertRaises(core.MountError) as cm:
+            core.export_to_lakuen(prefix, exe, prefix.name, "")
+        self.assertEqual(cm.exception.key, "err_lakuen_running")
+
     def test_registry_existing_section(self):
         reg = os.path.join(self.tmp.name, "system.reg")
         with open(reg, "w") as f:

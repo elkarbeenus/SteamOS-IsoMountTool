@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [2.1.0] – 2026-11-14
+
+### Added
+- **“Send to LakuenLauncher”** on the *Games & prefixes* page: adds the installed game to the LakuenLauncher library in one click – with the same prefix (filled into the game's prefix setting), the same Proton version, Steam Linux Runtime and your launch options (`WINE_LARGE_ADDRESS_AWARE=1`). If no game `.exe` was chosen yet, the tool asks for it first
+- Sending a game again updates the existing entry instead of creating a duplicate
+- A backup of the LakuenLauncher library is written before every change; if the launcher is running, the tool asks you to close it first so it doesn't overwrite the library
+
 ## [2.0.1] – 2026-11-14
 
 ### Fixed
