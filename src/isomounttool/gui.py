@@ -537,7 +537,7 @@ class LaunchDialog(QDialog):
         lay.addWidget(label(t("launch_exe"), "SectionTitle"))
         self.exe_list = QListWidget()
         self.exe_list.setMinimumHeight(120)
-        self.exe_list.setMaximumHeight(170)
+        self.exe_list.setMaximumHeight(130)
         base = iso.mountpoint if iso else ""
         exes = core.find_installers(base) if iso else ([exe] if exe else [])
         for p in exes:
@@ -868,6 +868,7 @@ class AboutPage(QWidget):
         d = label(t("about_text", max=core.MAX_ISOS), "", wrap=True)
         d.setAlignment(Qt.AlignCenter)
         d.setFixedWidth(640)
+        d.setMinimumHeight(d.heightForWidth(640) + 6)
         lay.addWidget(d, 0, Qt.AlignHCenter)
         lay.addSpacing(10)
         cr = label(t("about_credits"), "SectionTitle")
