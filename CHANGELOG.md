@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## [2.2.0] – 2026-11-14
+
+Now also for Windows 🪟
+
+### Added
+- **Windows version** (`SteamOS-IsoMountTool-x.y.z-windows-x64.exe`, Windows 10/11 64-bit) – a single .exe, nothing to install
+  - Mounts ISOs with Windows' built-in ISO support (same as right-click → *Mount*), up to 4 at the same time, each with its real drive letter
+  - **Run installer** starts the installer directly; if it needs administrator rights, Windows asks via UAC
+  - **Games** page: choose the installed game's .exe once, then start it with **Play**, open its folder, or send it to LakuenLauncher. *Remove* only removes the entry from the list – the installed game stays
+  - Auto update downloads the new .exe and restarts the tool
+  - Same interface, German & English
+- Releases now contain both the AppImage (SteamOS/Linux) and the Windows .exe
+
+### Changed
+- Slightly slimmer buttons on the ISO cards so “Run installer” always fits
+
 ## [2.1.0] – 2026-11-14
 
 ### Added

@@ -6,6 +6,7 @@
 
 <p align="center">
   Mount up to <b>4 ISO images</b> on SteamOS and run their Windows installers <b>directly with Proton</b> – no sudo, no terminal, no adding <code>setup.exe</code> to Steam by hand.<br>
+  Also available for <b>Windows 10/11</b>.<br>
   <i>Created by Dominic Lesina x Claude</i>
 </p>
 
@@ -30,17 +31,30 @@
 - 🔐 **No root** – mounting uses `udisksctl`, the same way Dolphin mounts drives
 - 📦 **Everything included** – the AppImage bundles its own Python and Qt
 
+## Downloads
+
+| System | File (from the [latest release](https://github.com/elkarbeenus/SteamOS-IsoMountTool/releases/latest)) |
+|---|---|
+| SteamOS / Linux | `SteamOS-IsoMountTool-x.y.z-x86_64.AppImage` |
+| Windows 10 / 11 (64-bit) | `SteamOS-IsoMountTool-x.y.z-windows-x64.exe` |
+
 ## Requirements
 
-- SteamOS 3.x in **Desktop Mode** (also works on most other Linux desktops)
-- For installers: Steam with at least one Proton version (e.g. *Proton Experimental*: Steam → Library → Tools) or GE-Proton (e.g. via ProtonUp-Qt)
+- **SteamOS:** SteamOS 3.x in **Desktop Mode** (also works on most other Linux desktops). For installers: Steam with at least one Proton version (e.g. *Proton Experimental*: Steam → Library → Tools) or GE-Proton (e.g. via ProtonUp-Qt)
+- **Windows:** Windows 10 or 11, 64-bit. Nothing else needed
 
 ## Installation
 
-1. Download the latest `SteamOS-IsoMountTool-x.y.z-x86_64.AppImage` from the [Releases page](https://github.com/elkarbeenus/SteamOS-IsoMountTool/releases/latest).
+### SteamOS / Linux
+1. Download the `.AppImage` from the [Releases page](https://github.com/elkarbeenus/SteamOS-IsoMountTool/releases/latest).
 2. Move it to a folder in your home directory, e.g. `~/Applications` (needed for the auto update).
 3. Right-click → **Properties** → **Permissions** → tick **Is executable**.
 4. Double-click it to start.
+
+### Windows
+1. Download the `.exe` from the [Releases page](https://github.com/elkarbeenus/SteamOS-IsoMountTool/releases/latest) and put it in a folder you can write to (e.g. your *Documents* or a *Tools* folder – needed for the auto update).
+2. Double-click it. No installation needed.
+3. Windows SmartScreen may warn because the file is not signed: **More info** → **Run anyway**.
 
 ## Installing a game from an ISO
 
@@ -59,6 +73,15 @@
 7. Optional: click **Send to LakuenLauncher** – the game appears in the launcher's library with the same prefix, Proton version and launch options. (Close LakuenLauncher before clicking; the tool tells you if it's still running.)
 
 Logs of every run are stored in `~/.local/share/steamos-isomounttool/logs/`.
+
+## Windows version
+
+The Windows version has the same interface with a few differences:
+
+- ISOs are mounted with Windows' built-in ISO support (like right-click → *Mount*); every ISO gets its real drive letter.
+- **Run installer** starts the installer directly – no Proton needed. If it needs administrator rights, Windows asks (UAC).
+- The **Games** page lists the games you installed: choose the game's `.exe` once (**Choose game .exe…**), then start it with **Play**. *Remove* only removes the entry – the installed game is not touched.
+- Settings: `%APPDATA%\steamos-isomounttool`, logs: `%LOCALAPPDATA%\steamos-isomounttool\logs`
 
 ## Command line
 
@@ -93,15 +116,17 @@ Settings: `~/.config/steamos-isomounttool/config.json`
 ```bash
 git clone https://github.com/elkarbeenus/SteamOS-IsoMountTool.git
 cd SteamOS-IsoMountTool
-python3 -m unittest discover -s tests   # core tests
+python3 -m unittest discover -s tests   # core tests (incl. simulated Windows logic)
 ./build.sh                              # → dist/SteamOS-IsoMountTool-<version>-x86_64.AppImage (needs internet)
 ```
+
+The Windows `.exe` is built with PyInstaller by GitHub Actions (job `windows` in `.github/workflows/release.yml`).
 
 ## Releasing (maintainers)
 
 1. Bump the version in `VERSION` and add a new section to `CHANGELOG.md` (`## [x.y.z] – date`).
 2. Commit and push to `main`.
-3. GitHub Actions runs the tests, builds the AppImage and, if there is no release for that version yet, creates the tag `vx.y.z` and publishes the release, using that version's CHANGELOG section as release notes. Installed copies pick the update up through the auto update.
+3. GitHub Actions runs the tests, builds the AppImage and the Windows `.exe` and, if there is no release for that version yet, creates the tag `vx.y.z` and publishes the release with both files, using that version's CHANGELOG section as release notes. Installed copies pick the update up through the auto update.
 
 ## Credits
 

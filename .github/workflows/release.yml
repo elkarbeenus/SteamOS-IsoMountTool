@@ -97,11 +97,11 @@ jobs:
             src/steamos-isomounttool.py
           ls -la dist
 
-      - name: Screenshots (offscreen)
+      - name: Screenshots (native Windows platform)
         shell: pwsh
         run: |
           $exe = (Get-ChildItem dist\*.exe | Select-Object -First 1).FullName
-          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:QT_QPA_PLATFORM = 'windows'
           $p = Start-Process -FilePath $exe -ArgumentList '--screenshots', "$PWD\shots-win" -Wait -PassThru
           Get-Content shots-win\errors.txt
           Get-ChildItem shots-win
