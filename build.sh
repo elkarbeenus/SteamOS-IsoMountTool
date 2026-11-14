@@ -68,7 +68,7 @@ install -m 644 "$ROOT/packaging/$APP_ID.svg" "$APPDIR/usr/share/$APP_ID/isomount
 # --- 4. Fallback libs (only used if the system lacks libxcb-cursor) ------------
 if command -v apt-get >/dev/null 2>&1; then
     tmpdeb="$(mktemp -d)"
-    ( cd "$tmpdeb" && apt-get download libxcb-cursor0 libxcb-image0 libxcb-render-util0 libxcb-util1 >/dev/null 2>&1 ) || true
+    ( cd "$tmpdeb" && apt-get download libxcb-cursor0 libxcb-image0 libxcb-render-util0 libxcb-util1 libxcb-icccm4 libxcb-keysyms1 >/dev/null 2>&1 ) || true
     for deb in "$tmpdeb"/*.deb; do
         [[ -f "$deb" ]] || continue
         dpkg -x "$deb" "$tmpdeb/x"
