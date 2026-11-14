@@ -133,6 +133,31 @@ class CoreTests(unittest.TestCase):
         with open(os.path.join(prefix.pfx, "system.reg")) as f:
             self.assertEqual(f.read().count('"d:"="cdrom"'), 1)
 
+    def test_unlink_prefix_drives_restores_steam_like_prefix(self):
+        core.current_isos()
+        prefix = core.get_prefix(core.Config(), "Anno 1602")
+        core.link_prefix_drives(prefix)
+        dos = os.path.join(prefix.pfx, "dosdevices")
+        os.symlink("/", os.path.join(dos, "z:"))
+        self.assertTrue(core.unlink_prefix_drives(prefix))
+        self.assertFalse(os.path.lexists(os.path.join(dos, "d:")))
+        self.assertEqual(os.readlink(os.path.join(dos, "z:")), "/")      # untouched
+        with open(os.path.join(prefix.pfx, "system.reg")) as f:
+            self.assertNotIn("cdrom", f.read())
+        self.assertFalse(core.unlink_prefix_drives(prefix))
+
+    def test_default_launch_is_steam_like(self):
+        cfg = core.Config()
+        self.assertFalse(cfg["drive_letters"])
+        isos = core.current_isos()
+        tool = core.pick_proton(core.find_protons())
+        exe = core.find_installers(isos[0].mountpoint)[0]
+        cmd, env, cwd = core.build_launch(exe, core.get_prefix(cfg, "X"), tool, cfg, isos)
+        self.assertEqual(cmd[-1], exe)                    # unix path, like Steam
+        self.assertEqual(cwd, os.path.dirname(exe))
+        self.assertNotIn("STEAM_COMPAT_LIBRARY_PATHS", env)
+        self.assertEqual(env["SteamAppId"], "0")
+
     def test_registry_existing_section(self):
         reg = os.path.join(self.tmp.name, "system.reg")
         with open(reg, "w") as f:

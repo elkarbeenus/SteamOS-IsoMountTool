@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## [2.0.1] – 2026-11-14
+
+### Fixed
+- **Installers did not start** (“could not open working directory D:\\”, exit code 1): the installer is now started exactly like Steam does it – with its normal Linux path and without extra drive letters. The installer window opens and you install as usual
+- Prefixes created with 2.0.0 are repaired automatically: the drive links D:–G: are removed on the next start
+- No extra prefix preparation run any more – Proton creates the prefix itself, like under Steam
+- Removed `STEAM_COMPAT_LIBRARY_PATHS` (caused “unable to use parent for game drive” warnings) and set the app id variables Proton expects
+
+### Changed
+- Drive letters D:–G: for mounted ISOs are now an **experimental option** in the settings (off by default)
+
 ## [2.0.0] – 2026-11-14
 
 Big update: a real graphical interface and Windows installers straight from the ISO with Proton 🎮

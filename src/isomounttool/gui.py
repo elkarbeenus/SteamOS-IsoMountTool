@@ -251,18 +251,24 @@ class GameRunner(QThread):
                 log.write(f"{core.APP_NAME} {core.app_version()}\nProton: {self.tool.name} ({self.tool.path})\n"
                           f"Prefix: {self.prefix.path}\nProgram: {self.exe}\n\n")
                 log.flush()
-                if not self.prefix.initialized:
-                    self.status.emit(self.t("st_preparing", name=self.prefix.name))
-                    cmd, env, cwd = core.init_command(self.prefix, self.tool, self.cfg, self.use_runtime)
-                    log.write("$ " + " ".join(cmd) + "\n")
-                    log.flush()
-                    try:
-                        subprocess.run(cmd, env=env, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, timeout=600)
-                    except subprocess.TimeoutExpired:
-                        log.write("prefix init timed out\n")
-                linked = core.link_prefix_drives(self.prefix)
+                letters = bool(self.cfg.get("drive_letters", False))
                 isos = core.current_isos()
-                win = core.windows_path_for(self.exe, isos) if (self.from_iso and linked) else ""
+                win = ""
+                if letters:
+                    # experimental: create the prefix first so D:..G: can be linked into it
+                    if not self.prefix.initialized:
+                        self.status.emit(self.t("st_preparing", name=self.prefix.name))
+                        cmd, env, cwd = core.init_command(self.prefix, self.tool, self.cfg, self.use_runtime)
+                        log.write("$ " + " ".join(cmd) + "\n")
+                        log.flush()
+                        try:
+                            subprocess.run(cmd, env=env, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, timeout=600)
+                        except subprocess.TimeoutExpired:
+                            log.write("prefix init timed out\n")
+                    if core.link_prefix_drives(self.prefix) and self.from_iso:
+                        win = core.windows_path_for(self.exe, isos)
+                elif core.unlink_prefix_drives(self.prefix):
+                    log.write("Removed drive letters D:-G: of older versions from this prefix\n")
                 cmd, env, cwd = core.build_launch(self.exe, self.prefix, self.tool, self.cfg, isos, win,
                                                   self.launch_options, self.use_runtime)
                 log.write("\n$ " + " ".join(cmd) + "\n")
@@ -302,9 +308,9 @@ class SlotCard(QFrame):
     open_requested = Signal(object)
     install_requested = Signal(object)
 
-    def __init__(self, t: Translator, slot: int):
+    def __init__(self, t: Translator, slot: int, letters: bool = False):
         super().__init__()
-        self.t, self.slot, self.iso = t, slot, None
+        self.t, self.slot, self.iso, self.letters = t, slot, None, letters
         self.setObjectName("Card")
         self.setAcceptDrops(True)
         self.setMinimumHeight(220)
@@ -325,7 +331,10 @@ class SlotCard(QFrame):
         t1 = label(f"{t('slot', n=slot + 1)} · {t('slot_empty')}", "CardTitle")
         t1.setAlignment(Qt.AlignCenter)
         el.addWidget(t1)
-        t2 = label(t("slot_empty_hint") + f"  ·  {t('drive', l=core.DRIVE_LETTERS[slot].upper())}", "Muted")
+        hint = t("slot_empty_hint")
+        if letters:
+            hint += f"  ·  {t('drive', l=core.DRIVE_LETTERS[slot].upper())}"
+        t2 = label(hint, "Muted")
         t2.setAlignment(Qt.AlignCenter)
         el.addWidget(t2)
         el.addStretch(1)
@@ -396,8 +405,9 @@ class SlotCard(QFrame):
             self.setCursor(Qt.ArrowCursor)
             self.title.setText(iso.label)
             self.file.setText(iso.name)
-            self.drive_badge.setText(self.t("drive", l=iso.drive_letter) if iso.drive_letter else "")
-            self.drive_badge.setVisible(bool(iso.drive_letter))
+            show = bool(iso.drive_letter) and self.letters
+            self.drive_badge.setText(self.t("drive", l=iso.drive_letter) if show else "")
+            self.drive_badge.setVisible(show)
             self.path.setText(iso.mountpoint or self.t("not_mounted"))
             found = core.find_installers(iso.mountpoint) if iso.mountpoint else []
             self.installer.setText(self.t("installer_found", exe=os.path.relpath(found[0], iso.mountpoint))
@@ -485,7 +495,7 @@ class IsoPage(QWidget):
         grid.setSpacing(18)
         self.cards = []
         for i in range(core.MAX_ISOS):
-            c = SlotCard(t, i)
+            c = SlotCard(t, i, bool(win.cfg.get("drive_letters", False)))
             c.mount_requested.connect(lambda slot, path: win.mount_dialog(slot, path))
             c.eject_requested.connect(win.eject_iso)
             c.open_requested.connect(lambda iso: core.open_path(iso.mountpoint))
@@ -790,6 +800,11 @@ class SettingsPage(QWidget):
         self.rt.setChecked(bool(cfg.get("use_runtime", True)))
         self.rt.toggled.connect(lambda v: self._set("use_runtime", bool(v)))
         pl.addWidget(self.rt)
+        self.letters = QCheckBox(t("set_letters"))
+        self.letters.setChecked(bool(cfg.get("drive_letters", False)))
+        self.letters.toggled.connect(self._letters_changed)
+        pl.addWidget(self.letters)
+        pl.addWidget(label(t("set_letters_hint"), "Muted", wrap=True))
         self.log = QCheckBox(t("set_log"))
         self.log.setChecked(bool(cfg.get("proton_log", False)))
         self.log.toggled.connect(lambda v: self._set("proton_log", bool(v)))
@@ -832,6 +847,10 @@ class SettingsPage(QWidget):
     def _set(self, key, value):
         self.win.cfg[key] = value
         self.win.cfg.save()
+
+    def _letters_changed(self, v):
+        self._set("drive_letters", bool(v))
+        QTimer.singleShot(0, lambda: self.win.rebuild(page=2))
 
     def _reset_opts(self):
         self.opts.setText(core.DEFAULT_LAUNCH_OPTIONS)
@@ -1124,7 +1143,7 @@ class MainWindow(QMainWindow):
             if exc:
                 self._mount_error(exc)
             elif res:
-                self.notify(self.t("mounted_toast", name=res.name, l=res.drive_letter))
+                self.notify(self.t("mounted_toast_simple", name=res.name))
 
         self._start_task(core.mount_iso, path, slot, done=done)
 

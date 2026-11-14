@@ -78,6 +78,7 @@ DEFAULT_CONFIG = {
     "proton_log": False,
     "prefix_base": "",         # "" = ~/Games/IsoMountTool
     "launch_options": DEFAULT_LAUNCH_OPTIONS,
+    "drive_letters": False,    # experimental: map slots to D:..G: inside prefixes
 }
 
 
@@ -735,8 +736,9 @@ def delete_prefix(prefix: Prefix):
     shutil.rmtree(prefix.path)
 
 
-def set_cdrom_registry(system_reg: str, letters=DRIVE_LETTERS) -> bool:
-    """Marks the given drive letters as CD-ROM drives (HKLM\\Software\\Wine\\Drives)."""
+def set_cdrom_registry(system_reg: str, letters=DRIVE_LETTERS, remove: bool = False) -> bool:
+    """Marks the given drive letters as CD-ROM drives (HKLM\\Software\\Wine\\Drives),
+    or removes these entries again with remove=True."""
     try:
         with open(system_reg, encoding="utf-8", errors="surrogateescape") as f:
             text = f.read()
@@ -747,7 +749,15 @@ def set_cdrom_registry(system_reg: str, letters=DRIVE_LETTERS) -> bool:
     header_re = re.compile(r"^\[Software\\\\Wine\\\\Drives\](\s+\d+)?\s*$", re.IGNORECASE)
     idx = next((i for i, l in enumerate(lines) if header_re.match(l)), None)
     wanted = {f'"{l}:"': f'"{l}:"="cdrom"' for l in letters}
-    if idx is None:
+    if remove:
+        if idx is None:
+            return True
+        end = idx + 1
+        while end < len(lines) and lines[end].strip() != "" and not lines[end].startswith("["):
+            end += 1
+        drop = {v.lower() for v in wanted.values()}
+        lines[idx + 1:end] = [l for l in lines[idx + 1:end] if l.strip().lower() not in drop]
+    elif idx is None:
         if lines and lines[-1] != "":
             lines.append("")
         lines.append(f"[Software\\\\Wine\\\\Drives] {int(time.time())}")
@@ -808,6 +818,28 @@ def link_prefix_drives(prefix: Prefix) -> bool:
             ok = False
     set_cdrom_registry(os.path.join(prefix.pfx, "system.reg"))
     return ok
+
+
+def unlink_prefix_drives(prefix: Prefix) -> bool:
+    """Removes the D:..G: links this tool created (and their CD-ROM entries) from a prefix.
+
+    Without them Proton behaves exactly like when the .exe is started from Steam."""
+    dosdevices = os.path.join(prefix.pfx, "dosdevices")
+    if not os.path.isdir(dosdevices):
+        return False
+    ours = drives_dir()
+    removed = []
+    for letter in DRIVE_LETTERS:
+        link = os.path.join(dosdevices, f"{letter}:")
+        try:
+            if os.path.islink(link) and os.readlink(link).startswith(ours):
+                os.remove(link)
+                removed.append(letter)
+        except OSError:
+            pass
+    if removed:
+        set_cdrom_registry(os.path.join(prefix.pfx, "system.reg"), removed, remove=True)
+    return bool(removed)
 
 
 def windows_path_for(exe: str, isos: list[IsoMount]) -> str:
@@ -872,7 +904,9 @@ def build_launch(exe: str, prefix: Prefix, tool: ProtonTool, cfg: dict,
         "STEAM_COMPAT_INSTALL_PATH": exe_dir,
         "STEAM_COMPAT_TOOL_PATHS": ":".join([tool.path] + ([runtime] if runtime else [])),
         "STEAM_COMPAT_MOUNTS": ":".join(mounts),
-        "STEAM_COMPAT_LIBRARY_PATHS": ":".join(mounts),
+        "STEAM_COMPAT_APP_ID": "0",
+        "SteamAppId": "0",
+        "SteamGameId": "0",
         "PROTON_VERB": "waitforexitandrun",
     })
     if cfg.get("proton_log"):

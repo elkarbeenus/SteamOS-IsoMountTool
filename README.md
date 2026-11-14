@@ -22,7 +22,7 @@
 - 🚀 **Newest Proton automatically** – Proton Experimental if installed, otherwise the highest version (official or GE-Proton). Any installed version can be picked
 - 🧠 **No more RAM-limit crashes** – launch options work like in Steam, default: `WINE_LARGE_ADDRESS_AWARE=1 %command%`
 - 🗂️ **One prefix per game** – stored in `~/Games/IsoMountTool/<game>`
-- 💽 **Disc swapping** – slot 1–4 are drives **D:–G:** inside every prefix (marked as CD-ROM). When the installer asks for disc 2, eject disc 1 and mount disc 2 into the same slot
+- 💽 **Multiple discs** – when the installer asks for disc 2, eject disc 1 and mount disc 2 (it is reachable under `Z:\run\media\…`). Optional, experimental: slots 1–4 as drives **D:–G:** inside the prefix
 - ▶️ **Games & prefixes page** – start the installed game, run any program in its prefix, open drive C:, delete a prefix
 - 🌐 **German & English**
 - 🔄 **Auto update** – checks this repository for new releases on start and asks whether to update or keep the current version (can be turned off)
@@ -53,7 +53,7 @@
    - **Proton version** – *Automatic* uses the newest one
    - **Launch options** – `WINE_LARGE_ADDRESS_AWARE=1 %command%` by default, same syntax as in Steam
 4. Click **Start** and install the game as usual (to `C:\` inside the prefix).
-5. **Multiple discs?** When the installer asks for the next disc: eject the ISO in the tool and mount the next one into the same slot – it keeps the same drive letter.
+5. **Multiple discs?** When the installer asks for the next disc: eject the ISO in the tool, mount the next one and point the installer to it (`Z:\run\media\<user>\<disc>`). If an installer insists on a CD drive, turn on *ISOs as drives D:–G:* in the settings (experimental).
 6. Afterwards, open **Games & prefixes** → **Run program…** and choose the game's `.exe` once. From then on **Play** starts it.
 
 Logs of every run are stored in `~/.local/share/steamos-isomounttool/logs/`.
@@ -74,8 +74,8 @@ Logs of every run are stored in `~/.local/share/steamos-isomounttool/logs/`.
 ## How it works
 
 - **Mounting:** `udisksctl loop-setup --read-only` + `udisksctl mount`. Mounted ISOs are found through the loop devices, so ISOs mounted another way count toward the limit of 4 too.
-- **Proton:** Proton is started the way Steam does it: `STEAM_COMPAT_DATA_PATH` points to the game's prefix, and Proton runs inside the Steam Linux Runtime it asks for (`_v2-entry-point`). Your launch options are applied like in Steam (`VAR=value … %command% args`).
-- **Drive letters:** `~/.local/share/steamos-isomounttool/drives/d…g` always point to the ISO in slot 1–4. Every prefix links `D:`–`G:` there and marks them as CD-ROM drives, so discs can be swapped while an installer runs.
+- **Proton:** Proton is started the way Steam starts a non-Steam game: `STEAM_COMPAT_DATA_PATH` points to the game's prefix, the `.exe` is passed with its Linux path, the working directory is the folder of the `.exe`, and Proton runs inside the Steam Linux Runtime it asks for (`_v2-entry-point`). Your launch options are applied like in Steam (`VAR=value … %command% args`).
+- **Drive letters (experimental, off by default):** `~/.local/share/steamos-isomounttool/drives/d…g` point to the ISO in slot 1–4, and the prefix links `D:`–`G:` there as CD-ROM drives.
 
 Settings: `~/.config/steamos-isomounttool/config.json`
 
