@@ -93,7 +93,7 @@ QCheckBox {{ spacing: 10px; }}
 QCheckBox::indicator {{
     width: 20px; height: 20px; border-radius: 5px; border: 1px solid {C['border']}; background: {C['bg']};
 }}
-QCheckBox::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; image: none; }}
+QCheckBox::indicator:checked {{ background: {C['accent']}; border-color: {C['accent']}; }}
 QScrollArea {{ border: none; background: transparent; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px; }}
@@ -160,7 +160,7 @@ def app_icon_pixmap(size: int) -> QPixmap:
 
 
 def button(text: str, icon: str | None = None, kind: str = "", color: str | None = None) -> QPushButton:
-    b = QPushButton(text)
+    b = QPushButton(text.replace("&", "&&"))
     if kind:
         b.setObjectName(kind)
     if icon:
@@ -361,6 +361,8 @@ class SlotCard(QFrame):
         fl.addLayout(top)
         self.path = ElidedLabel("", "Muted")
         fl.addWidget(self.path)
+        self.installer = ElidedLabel("", "Sub", Qt.ElideRight)
+        fl.addWidget(self.installer)
         self.running = label("", "Sub")
         self.running.setStyleSheet(f"color: {C['accent_h']}; font-weight: 600;")
         self.running.hide()
@@ -374,9 +376,10 @@ class SlotCard(QFrame):
         self.btn_install.clicked.connect(lambda: self.install_requested.emit(self.iso))
         self.btn_open.clicked.connect(lambda: self.open_requested.emit(self.iso))
         self.btn_eject.clicked.connect(lambda: self.eject_requested.emit(self.iso))
-        row.addWidget(self.btn_install, 2)
-        row.addWidget(self.btn_open, 1)
-        row.addWidget(self.btn_eject, 1)
+        self.btn_install.setMinimumWidth(190)
+        row.addWidget(self.btn_install, 1)
+        row.addWidget(self.btn_open)
+        row.addWidget(self.btn_eject)
         fl.addLayout(row)
         self.stack.addWidget(full)
         self.set_iso(None)
@@ -396,6 +399,9 @@ class SlotCard(QFrame):
             self.drive_badge.setText(self.t("drive", l=iso.drive_letter) if iso.drive_letter else "")
             self.drive_badge.setVisible(bool(iso.drive_letter))
             self.path.setText(iso.mountpoint or self.t("not_mounted"))
+            found = core.find_installers(iso.mountpoint) if iso.mountpoint else []
+            self.installer.setText(self.t("installer_found", exe=os.path.relpath(found[0], iso.mountpoint))
+                                   if found else self.t("installer_none"))
             self.btn_install.setEnabled(bool(iso.mountpoint))
             self.btn_open.setEnabled(bool(iso.mountpoint))
             self.running.setText(running_text)
@@ -509,10 +515,17 @@ class LaunchDialog(QDialog):
         super().__init__(win)
         self.win, t = win, win.t
         self.setWindowTitle(t("launch_title"))
-        self.setMinimumSize(720, 640)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(28, 24, 28, 24)
-        lay.setSpacing(12)
+        self.setMinimumSize(760, 700)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        body = QWidget()
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(28, 24, 28, 8)
+        lay.setSpacing(8)
         head = QHBoxLayout()
         ic = QLabel()
         ic.setPixmap(svg_pixmap("play", C["accent"], 34))
@@ -523,7 +536,8 @@ class LaunchDialog(QDialog):
 
         lay.addWidget(label(t("launch_exe"), "SectionTitle"))
         self.exe_list = QListWidget()
-        self.exe_list.setMinimumHeight(150)
+        self.exe_list.setMinimumHeight(120)
+        self.exe_list.setMaximumHeight(170)
         base = iso.mountpoint if iso else ""
         exes = core.find_installers(base) if iso else ([exe] if exe else [])
         for p in exes:
@@ -541,12 +555,8 @@ class LaunchDialog(QDialog):
         row.addWidget(browse)
         lay.addLayout(row)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(8)
-        grid.setColumnStretch(1, 1)
-
-        grid.addWidget(label(t("launch_prefix"), "SectionTitle"), 0, 0)
+        lay.addSpacing(6)
+        lay.addWidget(label(t("launch_prefix"), "SectionTitle"))
         self.prefix_box = QComboBox()
         self.prefix_box.setEditable(True)
         names = [p.name for p in core.list_prefixes(win.cfg)]
@@ -554,23 +564,25 @@ class LaunchDialog(QDialog):
         suggested = prefix.name if prefix else suggest_prefix_name(iso.name if iso else "")
         self.prefix_box.setCurrentText(suggested)
         self.prefix_box.setEnabled(prefix is None)
-        grid.addWidget(self.prefix_box, 0, 1)
-        grid.addWidget(label(t("launch_prefix_hint"), "Muted", wrap=True), 1, 1)
+        lay.addWidget(self.prefix_box)
+        lay.addWidget(label(t("launch_prefix_hint"), "Muted", wrap=True))
 
-        grid.addWidget(label(t("launch_proton"), "SectionTitle"), 2, 0)
+        lay.addSpacing(6)
+        lay.addWidget(label(t("launch_proton"), "SectionTitle"))
         self.proton_box = proton_combo(win, (prefix.meta.get("proton_path") if prefix else "") or win.cfg["proton"])
-        grid.addWidget(self.proton_box, 2, 1)
+        lay.addWidget(self.proton_box)
 
-        grid.addWidget(label(t("launch_options"), "SectionTitle"), 3, 0)
+        lay.addSpacing(6)
+        lay.addWidget(label(t("launch_options"), "SectionTitle"))
         orow = QHBoxLayout()
         self.options = QLineEdit(win.cfg.get("launch_options", core.DEFAULT_LAUNCH_OPTIONS))
         orow.addWidget(self.options, 1)
         reset = button(t("launch_reset"), "refresh")
         reset.clicked.connect(lambda: self.options.setText(core.DEFAULT_LAUNCH_OPTIONS))
         orow.addWidget(reset)
-        grid.addLayout(orow, 3, 1)
-        grid.addWidget(label(t("launch_options_hint"), "Muted", wrap=True), 4, 1)
-        lay.addLayout(grid)
+        lay.addLayout(orow)
+        lay.addWidget(label(t("launch_options_hint"), "Muted", wrap=True))
+        lay.addSpacing(6)
 
         self.runtime = QCheckBox(t("launch_runtime"))
         self.runtime.setChecked(bool(win.cfg.get("use_runtime", True)))
@@ -578,6 +590,7 @@ class LaunchDialog(QDialog):
         lay.addStretch(1)
 
         btns = QHBoxLayout()
+        btns.setContentsMargins(28, 8, 28, 22)
         btns.addStretch(1)
         cancel = button(t("cancel"))
         cancel.clicked.connect(self.reject)
@@ -587,7 +600,7 @@ class LaunchDialog(QDialog):
         self.start.setEnabled(bool(win.protons))
         btns.addWidget(cancel)
         btns.addWidget(self.start)
-        lay.addLayout(btns)
+        outer.addLayout(btns)
 
     def _browse(self, start_dir: str):
         path, _ = QFileDialog.getOpenFileName(self, self.win.t("launch_browse"), start_dir,
@@ -854,8 +867,8 @@ class AboutPage(QWidget):
         lay.addSpacing(12)
         d = label(t("about_text", max=core.MAX_ISOS), "", wrap=True)
         d.setAlignment(Qt.AlignCenter)
-        d.setMaximumWidth(620)
-        lay.addWidget(d, 0, Qt.AlignCenter)
+        d.setFixedWidth(640)
+        lay.addWidget(d, 0, Qt.AlignHCenter)
         lay.addSpacing(10)
         cr = label(t("about_credits"), "SectionTitle")
         cr.setAlignment(Qt.AlignCenter)
@@ -1325,7 +1338,17 @@ def make_app() -> QApplication:
                       (QPalette.ToolTipText, C["text"]), (QPalette.PlaceholderText, C["muted"])):
         pal.setColor(role, QColor(col))
     app.setPalette(pal)
-    app.setStyleSheet(QSS)
+    qss = QSS
+    try:
+        check = os.path.join(core.data_dir(), "ui", "check.svg")
+        os.makedirs(os.path.dirname(check), exist_ok=True)
+        with open(check, "w", encoding="utf-8") as f:
+            f.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" '
+                    'stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>')
+        qss += "QCheckBox::indicator:checked { image: url(%s); }" % check.replace("\\", "/")
+    except OSError:
+        pass
+    app.setStyleSheet(qss)
     return app
 
 

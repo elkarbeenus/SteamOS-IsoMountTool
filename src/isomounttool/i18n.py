@@ -20,6 +20,8 @@ STRINGS = {
     "btn_install": ("Installer starten", "Run installer"),
     "btn_open": ("Öffnen", "Open"),
     "btn_eject": ("Auswerfen", "Eject"),
+    "installer_found": ("Installer gefunden: {exe}", "Installer found: {exe}"),
+    "installer_none": ("Kein Installer gefunden – im Dialog eine .exe wählen", "No installer found – choose an .exe in the dialog"),
     "not_mounted": ("nicht eingehängt", "not mounted"),
     "running_on": ("Läuft: {exe}", "Running: {exe}"),
 
