@@ -1,50 +1,76 @@
-name: Build & Release AppImage
+name: Build, test & release
 
 on:
   push:
-    branches: [main]
-    paths: ['VERSION', 'CHANGELOG.md', 'src/**', 'packaging/**', 'build.sh', '.github/workflows/release.yml']
-    tags: ['v*']
+    branches: ['**']
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    if: github.ref != 'refs/heads/ci-screenshots'
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin file
+        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin file xvfb
 
-      - name: Determine version / skip if already released
-        id: ver
+      - name: Unit tests (core logic)
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Build AppImage
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./build.sh
+
+      - name: Smoke test
+        run: |
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          ./dist/*.AppImage --version
+          ./dist/*.AppImage --list
+          ./dist/*.AppImage --list-proton
+
+      - name: Screenshots (offscreen + real X11 via Xvfb)
+        run: |
+          mkdir -p shots
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          QT_QPA_PLATFORM=offscreen ./dist/*.AppImage --screenshots shots/offscreen > shots/log-offscreen.txt 2>&1 || touch shots/FAILED
+          xvfb-run -a -s "-screen 0 1400x900x24" env QT_QPA_PLATFORM=xcb ./dist/*.AppImage --screenshots shots/xcb > shots/log-xcb.txt 2>&1 || touch shots/FAILED
+          ls -la dist > shots/dist.txt
+          cat shots/log-*.txt
+
+      - name: Publish screenshots to branch ci-screenshots
+        if: always() && github.ref != 'refs/heads/main'
+        run: |
+          mkdir -p shots
+          rm -rf /tmp/pub && mkdir /tmp/pub && cp -r shots/. /tmp/pub/
+          echo "${GITHUB_SHA}" > /tmp/pub/COMMIT
+          cd /tmp/pub
+          git init -q && git checkout -q -b ci-screenshots && git add -A
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "Screenshots for ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-screenshots
+
+      - name: Fail if screenshots failed
+        run: test ! -e shots/FAILED
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppImage
+          path: dist/*.AppImage
+
+      - name: Release (main only, when VERSION has no release yet)
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="$(tr -d '[:space:]' < VERSION)"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
           if gh release view "v$v" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release v$v already exists – nothing to publish."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Release v$v already exists – nothing to publish."; exit 0
           fi
-
-      - name: Syntax check
-        run: bash -n src/steamos-isomounttool
-
-      - name: Build AppImage
-        run: ./build.sh
-
-      - name: Smoke test
-        run: APPIMAGE_EXTRACT_AND_RUN=1 ./dist/*.AppImage --version
-
-      - name: Release notes from CHANGELOG
-        run: |
-          v="$(tr -d '[:space:]' < VERSION)"
           {
             echo "## SteamOS ISO Mount Tool $v"
             echo
@@ -60,18 +86,4 @@ jobs:
             echo "*Created by Dominic Lesina x Claude*"
           } > release-notes.md
           cat release-notes.md
-
-      - name: Create GitHub release (and tag)
-        if: steps.ver.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          v="${{ steps.ver.outputs.version }}"
-          gh release create "v$v" dist/*.AppImage --target "$GITHUB_SHA" \
-            --title "v$v" --notes-file release-notes.md
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: AppImage
-          path: dist/*.AppImage
+          gh release create "v$v" dist/*.AppImage --target "$GITHUB_SHA" --title "v$v" --notes-file release-notes.md

@@ -1,4 +1,21 @@
 #!/bin/sh
 # AppRun for SteamOS ISO Mount Tool – Created by Dominic Lesina x Claude
 HERE="$(dirname "$(readlink -f "$0")")"
-exec bash "$HERE/usr/bin/steamos-isomounttool" "$@"
+
+# Remember variables we change, so programs started by the tool (Proton, file manager)
+# get the user's original environment back.
+for v in LD_LIBRARY_PATH QT_PLUGIN_PATH QT_QPA_PLATFORMTHEME QT_STYLE_OVERRIDE QML2_IMPORT_PATH SSL_CERT_FILE; do
+    eval "export ISOMT_ORIG_$v=\"\${$v-}\""
+done
+unset QT_PLUGIN_PATH QT_QPA_PLATFORMTHEME QT_STYLE_OVERRIDE QML2_IMPORT_PATH
+
+# Qt needs libxcb-cursor; use the bundled copy only if the system has none.
+LDC="$(command -v ldconfig 2>/dev/null || echo /sbin/ldconfig)"
+if ! "$LDC" -p 2>/dev/null | grep -q 'libxcb-cursor\.so\.0'; then
+    export LD_LIBRARY_PATH="$HERE/usr/lib/fallback${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+for c in /etc/ssl/certs/ca-certificates.crt /etc/ca-certificates/extracted/tls-ca-bundle.pem /etc/pki/tls/certs/ca-bundle.crt; do
+    if [ -z "${SSL_CERT_FILE-}" ] && [ -r "$c" ]; then export SSL_CERT_FILE="$c"; fi
+done
+
+exec "$HERE/@PYBIN@" -I "$HERE/usr/share/steamos-isomounttool/steamos-isomounttool.py" "$@"
