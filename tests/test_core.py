@@ -221,6 +221,22 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(core.version_gt("1.0.0", "1.0.0"))
         self.assertTrue(core.version_gt("1.0.0", "1.0.0-dev"))
 
+    def test_update_checksum_and_decision(self):
+        f = os.path.join(self.tmp.name, "SteamOS-IsoMountTool-9.9.9-x86_64.AppImage")
+        with open(f, "wb") as fh:
+            fh.write(b"\x7fELF-new-build")
+        h = core.sha256_of(f)
+        good = f"{h}  SteamOS-IsoMountTool-9.9.9-x86_64.AppImage\n{'0' * 64}  other.exe\n"
+        self.assertTrue(core.verify_sha256(f, good, os.path.basename(f)))
+        self.assertFalse(core.verify_sha256(f, good.replace(h, "1" * 64), os.path.basename(f)))
+        self.assertFalse(core.verify_sha256(f, "", os.path.basename(f)))
+        # decision: older / same / newer
+        self.assertFalse(core.version_gt("2.1.0", "2.2.0"))
+        self.assertFalse(core.version_gt("2.2.0", "2.2.0"))
+        self.assertTrue(core.version_gt("2.2.1", "2.2.0"))
+        os.environ["ISOMT_NO_UPDATE"] = "1"
+        self.assertTrue(core.update_check_disabled())
+
     def test_config_migration(self):
         os.makedirs(core.config_dir(), exist_ok=True)
         with open(os.path.join(core.config_dir(), "config"), "w") as f:

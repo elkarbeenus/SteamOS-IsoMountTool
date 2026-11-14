@@ -15,8 +15,11 @@ Now also for Windows 🪟
   - Same interface, German & English
 - Releases now contain both the AppImage (SteamOS/Linux) and the Windows .exe
 
+- Updates are now **verified with SHA-256** before they replace the program (releases contain `SHA256SUMS.txt`)
+- `ISOMT_NO_UPDATE=1` turns the update check off (offline use)
+
 ### Changed
-- Slightly slimmer buttons on the ISO cards so “Run installer” always fits
+- ISO cards: “Run installer” now has its own row, so all buttons fit at every window size
 
 ## [2.1.0] – 2026-11-14
 

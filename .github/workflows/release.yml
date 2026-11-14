@@ -172,4 +172,5 @@ jobs:
             echo "*Created by Dominic Lesina x Claude*"
           } > release-notes.md
           cat release-notes.md
-          gh release create "v$v" dist/*.AppImage dist/*.exe --target "$GITHUB_SHA" --title "v$v" --notes-file release-notes.md
+          ( cd dist && sha256sum *.AppImage *.exe > SHA256SUMS.txt && cat SHA256SUMS.txt )
+          gh release create "v$v" dist/*.AppImage dist/*.exe dist/SHA256SUMS.txt --target "$GITHUB_SHA" --title "v$v" --notes-file release-notes.md

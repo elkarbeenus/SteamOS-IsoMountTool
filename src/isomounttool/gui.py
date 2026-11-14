@@ -399,9 +399,11 @@ class SlotCard(QFrame):
         self.btn_eject.clicked.connect(lambda: self.eject_requested.emit(self.iso))
         for b in (self.btn_install, self.btn_open, self.btn_eject):
             b.setStyleSheet("padding: 9px 10px;")
-        row.addWidget(self.btn_install, 1)
-        row.addWidget(self.btn_open)
-        row.addWidget(self.btn_eject)
+        fl.addWidget(self.btn_install)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(self.btn_open, 1)
+        row.addWidget(self.btn_eject, 1)
         fl.addLayout(row)
         self.stack.addWidget(full)
         self.set_iso(None)
@@ -1012,7 +1014,7 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self.refresh)
         self.timer.start(5000 if core.IS_WINDOWS else 2000)
         self.refresh(force=True)
-        if check_updates and cfg.get("auto_update", True):
+        if check_updates and cfg.get("auto_update", True) and not core.update_check_disabled():
             QTimer.singleShot(1200, lambda: self.check_updates(manual=False))
 
     # ----- UI construction ----------------------------------------------------
@@ -1423,7 +1425,8 @@ class MainWindow(QMainWindow):
                 subprocess.Popen([target, "--no-update-check"], env=core.clean_env(), start_new_session=True)
             QApplication.instance().quit()
 
-        self._start_task(core.download_update, info["url"], target, done=done)
+        self._start_task(core.download_update, info["url"], target, info.get("sums_url", ""),
+                         info.get("name", ""), done=done)
 
     def closeEvent(self, e):  # noqa: N802
         self.timer.stop()

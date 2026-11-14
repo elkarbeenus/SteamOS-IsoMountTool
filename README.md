@@ -27,7 +27,7 @@
 - ▶️ **Games & prefixes page** – start the installed game, run any program in its prefix, open drive C:, delete a prefix
 - 🚀 **Send to LakuenLauncher** – one click adds the installed game to [LakuenLauncher](https://github.com/elkarbeenus/Lakuenlauncher) with the same prefix, Proton and launch options
 - 🌐 **German & English**
-- 🔄 **Auto update** – checks this repository for new releases on start and asks whether to update or keep the current version (can be turned off)
+- 🔄 **Auto update** – checks this repository for new releases on start and asks whether to update or keep the current version; one click downloads, verifies (SHA-256) and replaces the program, settings and games stay (can be turned off, or set `ISOMT_NO_UPDATE=1`)
 - 🔐 **No root** – mounting uses `udisksctl`, the same way Dolphin mounts drives
 - 📦 **Everything included** – the AppImage bundles its own Python and Qt
 

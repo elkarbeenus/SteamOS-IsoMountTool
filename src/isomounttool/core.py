@@ -1100,14 +1100,52 @@ def fetch_latest_release(timeout: int = 8) -> dict | None:
     tag = d.get("tag_name") or ""
     if not tag:
         return None
-    url = ""
+    url = name = sums = ""
     want = ".exe" if IS_WINDOWS else ".AppImage"
     for a in d.get("assets") or []:
-        if str(a.get("name", "")).endswith(want):
-            url = a.get("browser_download_url", "")
-            break
-    return {"tag": tag, "version": tag.lstrip("vV"), "url": url, "notes": d.get("body") or "",
-            "page": d.get("html_url") or f"{REPO_URL}/releases/latest"}
+        n = str(a.get("name", ""))
+        if n.endswith(want) and not url:
+            url, name = a.get("browser_download_url", ""), n
+        elif n == "SHA256SUMS.txt":
+            sums = a.get("browser_download_url", "")
+    return {"tag": tag, "version": tag.lstrip("vV"), "url": url, "name": name, "sums_url": sums,
+            "notes": d.get("body") or "", "page": d.get("html_url") or f"{REPO_URL}/releases/latest"}
+
+
+def update_check_disabled() -> bool:
+    """ISOMT_NO_UPDATE=1 turns the update check off (offline use)."""
+    return os.environ.get("ISOMT_NO_UPDATE", "") not in ("", "0")
+
+
+def sha256_of(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_sha256(path: str, sums_text: str, name: str) -> bool:
+    """Checks `path` against the line for `name` in a SHA256SUMS file."""
+    for line in sums_text.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[-1].lstrip("*") == name:
+            return parts[0].lower() == sha256_of(path)
+    return False
+
+
+def _fetch_text(url: str, timeout: int = 20) -> str:
+    if shutil.which("curl"):
+        rc, out = run(["curl", "-fsSL", "--max-time", str(timeout), url], timeout=timeout + 5)
+        if rc == 0:
+            return out
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": f"{APP_ID}/{app_version()}"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", "replace")
+    except Exception:
+        return ""
 
 
 def can_self_update() -> str:
@@ -1122,7 +1160,9 @@ def can_self_update() -> str:
     return ""
 
 
-def download_update(url: str, target: str) -> bool:
+def download_update(url: str, target: str, sums_url: str = "", name: str = "") -> bool:
+    """Downloads the new release file, verifies it (SHA-256 if the release has SHA256SUMS.txt)
+    and replaces the running program atomically. Settings and games are not touched."""
     tmp = f"{target}.update.{os.getpid()}"
     ok = False
     if shutil.which("curl"):
@@ -1141,6 +1181,9 @@ def download_update(url: str, target: str) -> bool:
             with open(tmp, "rb") as f:
                 head = f.read(4)
             ok = head[:2] == b"MZ" if IS_WINDOWS else head == b"\x7fELF"
+        if ok and sums_url and name:
+            sums = _fetch_text(sums_url)
+            ok = bool(sums) and verify_sha256(tmp, sums, name)
         if ok:
             if IS_WINDOWS:
                 old = target + ".old"          # a running .exe can be renamed, not overwritten
