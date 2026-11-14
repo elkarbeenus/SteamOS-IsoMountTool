@@ -43,6 +43,8 @@
 
 ## Installing a game from an ISO
 
+<p align="center"><img src="docs/screenshot-installer.png" width="560" alt="Run installer dialog"></p>
+
 1. **Mount** the ISO (click a free slot or drag the `.iso` onto the window).
 2. Click **Run installer** on the slot.
 3. Check the dialog:
