@@ -76,6 +76,8 @@ Logs of every run are stored in `~/.local/share/steamos-isomounttool/logs/`.
 
 ## Windows version
 
+<p align="center"><img src="docs/screenshot-windows.png" width="620" alt="Windows version"></p>
+
 The Windows version has the same interface with a few differences:
 
 - ISOs are mounted with Windows' built-in ISO support (like right-click → *Mount*); every ISO gets its real drive letter.
