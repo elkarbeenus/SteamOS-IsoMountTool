@@ -18,30 +18,21 @@ rm -rf "$APPDIR"
 mkdir -p "$APPDIR/opt" "$APPDIR/usr/share/$APP_ID" "$APPDIR/usr/lib/fallback" \
          "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/256x256/apps" "$DIST"
 
-# --- 1. Python (relocatable build) -------------------------------------------
-PY_TGZ="$BUILD/python-$PY_SERIES.tar.gz"
-if [[ ! -s "$PY_TGZ" ]]; then
-    echo ">> Looking up python-build-standalone release"
-    auth=()
-    [[ -n "${GITHUB_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
-    url="$(curl -fsSL "${auth[@]}" https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest |
-        PY_SERIES="$PY_SERIES" python3 -c '
-import json, os, re, sys
-series = re.escape(os.environ["PY_SERIES"])
-assets = [a["browser_download_url"] for a in json.load(sys.stdin)["assets"]]
-for suffix in ("install_only_stripped", "install_only"):
-    pat = re.compile(r"/cpython-" + series + r"\.\d+\+\d+-x86_64-unknown-linux-gnu-" + suffix + r"\.tar\.gz$")
-    hits = [a for a in assets if pat.search(a)]
-    if hits:
-        print(hits[0]); break
-')"
-    [[ -n "$url" ]] || { echo "No Python $PY_SERIES build found"; exit 1; }
-    echo ">> Downloading $url"
-    curl -fsSL -o "$PY_TGZ" "$url"
+# --- 1. Python (relocatable python-build-standalone build, fetched with uv) --------
+if ! command -v uv >/dev/null 2>&1; then
+    python3 -m pip install --user --quiet uv
+    export PATH="$HOME/.local/bin:$PATH"
 fi
-tar -xzf "$PY_TGZ" -C "$APPDIR/opt"           # -> opt/python/
+UVPY="$BUILD/uv-python"
+uv python install "$PY_SERIES" --install-dir "$UVPY"
+SRC_PY="$(find "$UVPY" -maxdepth 1 -type d -name "cpython-$PY_SERIES*-linux-x86_64-gnu" | sort | tail -n1)"
+[[ -n "$SRC_PY" ]] || { echo "uv did not install Python $PY_SERIES"; ls -la "$UVPY"; exit 1; }
+echo ">> Using $SRC_PY"
+cp -a "$SRC_PY" "$APPDIR/opt/python"
+rm -f "$APPDIR/opt/python/lib/python$PY_SERIES/EXTERNALLY-MANAGED"
 PY="$APPDIR/opt/python/bin/python$PY_SERIES"
 [[ -x "$PY" ]] || { echo "python binary missing: $PY"; exit 1; }
+"$PY" -m ensurepip --upgrade >/dev/null 2>&1 || true
 
 # --- 2. PySide6 ----------------------------------------------------------------
 echo ">> Installing $PYSIDE_SPEC"
