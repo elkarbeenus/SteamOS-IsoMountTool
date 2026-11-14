@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    if: github.ref != 'refs/heads/ci-screenshots'
+  linux:
+    if: ${{ !startsWith(github.ref, 'refs/heads/ci-screenshots') }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -67,11 +67,86 @@ jobs:
           name: AppImage
           path: dist/*.AppImage
 
-      - name: Release (main only, when VERSION has no release yet)
-        if: github.ref == 'refs/heads/main'
+  windows:
+    if: ${{ !startsWith(github.ref, 'refs/heads/ci-screenshots') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: python -m pip install --disable-pip-version-check "PySide6-Essentials~=6.8.0" pyinstaller pillow
+
+      - name: Build .exe (PyInstaller)
+        shell: bash
+        run: |
+          v="$(tr -d '[:space:]' < VERSION)"
+          mkdir -p build
+          python packaging/make_ico.py build/icon.ico
+          cp VERSION src/isomounttool/VERSION
+          cp packaging/steamos-isomounttool.svg src/isomounttool/icon.svg
+          python -m PyInstaller --noconfirm --clean --onefile --windowed \
+            --name "SteamOS-IsoMountTool-$v-windows-x64" --icon build/icon.ico \
+            --paths src --collect-submodules isomounttool \
+            --add-data "src/isomounttool/VERSION;isomounttool" \
+            --add-data "src/isomounttool/icon.svg;isomounttool" \
+            --exclude-module tkinter \
+            src/steamos-isomounttool.py
+          ls -la dist
+
+      - name: Screenshots (offscreen)
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem dist\*.exe | Select-Object -First 1).FullName
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $p = Start-Process -FilePath $exe -ArgumentList '--screenshots', "$PWD\shots-win" -Wait -PassThru
+          Get-Content shots-win\errors.txt
+          Get-ChildItem shots-win
+          if ($p.ExitCode -ne 0) { New-Item shots-win\FAILED -ItemType File | Out-Null }
+
+      - name: Publish screenshots to branch ci-screenshots-win
+        if: always() && github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          mkdir -p shots-win
+          rm -rf ../pub && mkdir ../pub && cp -r shots-win/. ../pub/
+          echo "${GITHUB_SHA}" > ../pub/COMMIT
+          ls -la dist > ../pub/dist.txt || true
+          cd ../pub
+          git init -q && git checkout -q -b ci-screenshots-win && git add -A
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "Windows screenshots for ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-screenshots-win
+
+      - name: Fail if screenshots failed
+        shell: bash
+        run: test ! -e shots-win/FAILED
+
+      - name: Upload exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowsExe
+          path: dist/*.exe
+
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [linux, windows]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release (when VERSION has no release yet)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          ls -la dist
           v="$(tr -d '[:space:]' < VERSION)"
           if gh release view "v$v" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release v$v already exists – nothing to publish."; exit 0
@@ -81,14 +156,20 @@ jobs:
             echo
             awk -v v="$v" '/^## \[/{ f = (index($0, "[" v "]") > 0); next } f' CHANGELOG.md
             echo
+            echo "### Downloads"
+            echo "| System | File |"
+            echo "|---|---|"
+            echo "| SteamOS / Linux | \`SteamOS-IsoMountTool-$v-x86_64.AppImage\` |"
+            echo "| Windows 10 / 11 (64-bit) | \`SteamOS-IsoMountTool-$v-windows-x64.exe\` |"
+            echo
             echo "### Installation"
-            echo "1. Download \`SteamOS-IsoMountTool-$v-x86_64.AppImage\` below"
-            echo "2. Right-click → Properties → Permissions → **Is executable**"
-            echo "3. Double-click to start"
+            echo "**SteamOS / Linux:** download the AppImage → right-click → Properties → Permissions → **Is executable** → double-click."
+            echo
+            echo "**Windows:** download the .exe and double-click it – no installation needed. (Windows SmartScreen may warn because the file is not signed: *More info* → *Run anyway*.)"
             echo
             echo "Already installed? The tool offers this update automatically on its next start."
             echo
             echo "*Created by Dominic Lesina x Claude*"
           } > release-notes.md
           cat release-notes.md
-          gh release create "v$v" dist/*.AppImage --target "$GITHUB_SHA" --title "v$v" --notes-file release-notes.md
+          gh release create "v$v" dist/*.AppImage dist/*.exe --target "$GITHUB_SHA" --title "v$v" --notes-file release-notes.md

@@ -249,6 +249,17 @@ class GameRunner(QThread):
             os.makedirs(core.logs_dir(), exist_ok=True)
             os.makedirs(self.prefix.path, exist_ok=True)
             with open(self.log_path, "w", encoding="utf-8", errors="replace") as log:
+                if core.IS_WINDOWS:
+                    log.write(f"{core.APP_NAME} {core.app_version()} (Windows)\nProgram: {self.exe}\n\n")
+                    log.flush()
+                    self.prefix.meta.update({"name": self.prefix.name, "last_run": int(time.time())})
+                    self.prefix.save_meta()
+                    self.status.emit(self.t("st_running_win", exe=self.exe_name))
+                    _, _, args = core.parse_launch_options(self.launch_options)
+                    code = core.run_windows_program(self.exe, args, log)
+                    log.write(f"\nexit code: {code}\n")
+                    self.finished_run.emit(code, self.log_path)
+                    return
                 log.write(f"{core.APP_NAME} {core.app_version()}\nProton: {self.tool.name} ({self.tool.path})\n"
                           f"Prefix: {self.prefix.path}\nProgram: {self.exe}\n\n")
                 log.flush()
@@ -386,7 +397,8 @@ class SlotCard(QFrame):
         self.btn_install.clicked.connect(lambda: self.install_requested.emit(self.iso))
         self.btn_open.clicked.connect(lambda: self.open_requested.emit(self.iso))
         self.btn_eject.clicked.connect(lambda: self.eject_requested.emit(self.iso))
-        self.btn_install.setMinimumWidth(190)
+        for b in (self.btn_install, self.btn_open, self.btn_eject):
+            b.setStyleSheet("padding: 9px 10px;")
         row.addWidget(self.btn_install, 1)
         row.addWidget(self.btn_open)
         row.addWidget(self.btn_eject)
@@ -406,7 +418,7 @@ class SlotCard(QFrame):
             self.setCursor(Qt.ArrowCursor)
             self.title.setText(iso.label)
             self.file.setText(iso.name)
-            show = bool(iso.drive_letter) and self.letters
+            show = bool(iso.drive_letter) and (self.letters or core.IS_WINDOWS)
             self.drive_badge.setText(self.t("drive", l=iso.drive_letter) if show else "")
             self.drive_badge.setVisible(show)
             self.path.setText(iso.mountpoint or self.t("not_mounted"))
@@ -567,7 +579,7 @@ class LaunchDialog(QDialog):
         lay.addLayout(row)
 
         lay.addSpacing(6)
-        lay.addWidget(label(t("launch_prefix"), "SectionTitle"))
+        lay.addWidget(label(t("launch_game" if core.IS_WINDOWS else "launch_prefix"), "SectionTitle"))
         self.prefix_box = QComboBox()
         self.prefix_box.setEditable(True)
         names = [p.name for p in core.list_prefixes(win.cfg)]
@@ -576,15 +588,18 @@ class LaunchDialog(QDialog):
         self.prefix_box.setCurrentText(suggested)
         self.prefix_box.setEnabled(prefix is None)
         lay.addWidget(self.prefix_box)
-        lay.addWidget(label(t("launch_prefix_hint"), "Muted", wrap=True))
+        lay.addWidget(label(t("launch_game_hint" if core.IS_WINDOWS else "launch_prefix_hint"), "Muted", wrap=True))
 
-        lay.addSpacing(6)
-        lay.addWidget(label(t("launch_proton"), "SectionTitle"))
+        proton_title = label(t("launch_proton"), "SectionTitle")
         self.proton_box = proton_combo(win, (prefix.meta.get("proton_path") if prefix else "") or win.cfg["proton"])
+        lay.addSpacing(6)
+        lay.addWidget(proton_title)
         lay.addWidget(self.proton_box)
+        linux_only = [proton_title, self.proton_box]
 
         lay.addSpacing(6)
-        lay.addWidget(label(t("launch_options"), "SectionTitle"))
+        opt_title = label(t("launch_options"), "SectionTitle")
+        lay.addWidget(opt_title)
         orow = QHBoxLayout()
         self.options = QLineEdit(win.cfg.get("launch_options", core.DEFAULT_LAUNCH_OPTIONS))
         orow.addWidget(self.options, 1)
@@ -592,12 +607,17 @@ class LaunchDialog(QDialog):
         reset.clicked.connect(lambda: self.options.setText(core.DEFAULT_LAUNCH_OPTIONS))
         orow.addWidget(reset)
         lay.addLayout(orow)
-        lay.addWidget(label(t("launch_options_hint"), "Muted", wrap=True))
+        opt_hint = label(t("launch_options_hint"), "Muted", wrap=True)
+        lay.addWidget(opt_hint)
         lay.addSpacing(6)
 
         self.runtime = QCheckBox(t("launch_runtime"))
         self.runtime.setChecked(bool(win.cfg.get("use_runtime", True)))
         lay.addWidget(self.runtime)
+        if core.IS_WINDOWS:              # programs run natively on Windows – no Proton settings
+            self.options.setText("")
+            for w in linux_only + [opt_title, self.options, reset, opt_hint, self.runtime]:
+                w.hide()
         lay.addStretch(1)
 
         btns = QHBoxLayout()
@@ -608,7 +628,7 @@ class LaunchDialog(QDialog):
         self.start = button(t("launch_start"), "play", "Primary")
         self.start.setDefault(True)
         self.start.clicked.connect(self._accept)
-        self.start.setEnabled(bool(win.protons))
+        self.start.setEnabled(bool(win.protons) or core.IS_WINDOWS)
         btns.addWidget(cancel)
         btns.addWidget(self.start)
         outer.addLayout(btns)
@@ -685,9 +705,13 @@ class PrefixCard(QFrame):
         col.addWidget(ElidedLabel(prefix.name, "CardTitle", Qt.ElideRight))
         exe = prefix.meta.get("last_exe", "")
         has_exe = bool(exe) and os.path.isfile(exe)
-        info = t("game_exe", exe=os.path.basename(exe)) if has_exe else t("game_no_exe")
+        info = (t("game_exe", exe=os.path.basename(exe)) if has_exe
+                else t("game_no_exe_win" if core.IS_WINDOWS else "game_no_exe"))
         col.addWidget(label(info, "Sub", wrap=True))
-        extra = prefix.path + (f"  ·  {prefix.meta['proton']}" if prefix.meta.get("proton") else "")
+        if core.IS_WINDOWS:
+            extra = os.path.dirname(exe) if has_exe else ""
+        else:
+            extra = prefix.path + (f"  ·  {prefix.meta['proton']}" if prefix.meta.get("proton") else "")
         col.addWidget(ElidedLabel(extra, "Muted"))
         lay.addLayout(col, 1)
         btns = QGridLayout()
@@ -695,11 +719,16 @@ class PrefixCard(QFrame):
         play = button(t("btn_play"), "play", "Primary")
         play.setEnabled(has_exe)
         play.clicked.connect(lambda: win.run_in_prefix(prefix, exe))
-        run = button(t("btn_run_exe"), "file")
+        run = button(t("btn_choose_exe" if core.IS_WINDOWS else "btn_run_exe"), "file")
         run.clicked.connect(lambda: win.pick_and_run_in_prefix(prefix))
-        openc = button(t("btn_open_c"), "folder")
-        openc.clicked.connect(lambda: core.open_path(prefix.drive_c if os.path.isdir(prefix.drive_c) else prefix.path))
-        delete = button(t("btn_delete"), "trash", "Danger")
+        openc = button(t("btn_open_folder" if core.IS_WINDOWS else "btn_open_c"), "folder")
+        if core.IS_WINDOWS:
+            openc.setEnabled(has_exe)
+            openc.clicked.connect(lambda: core.open_path(os.path.dirname(exe)))
+        else:
+            openc.clicked.connect(lambda: core.open_path(prefix.drive_c if os.path.isdir(prefix.drive_c)
+                                                         else prefix.path))
+        delete = button(t("btn_remove" if core.IS_WINDOWS else "btn_delete"), "trash", "Danger")
         delete.clicked.connect(lambda: win.delete_prefix(prefix))
         lakuen = button(t("btn_lakuen"), "send")
         lakuen.clicked.connect(lambda: win.send_to_lakuen(prefix))
@@ -718,7 +747,7 @@ class GamesPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(36, 32, 36, 28)
         lay.setSpacing(18)
-        self.header = Header(win.t("games_title"))
+        self.header = Header(win.t("games_title_win" if core.IS_WINDOWS else "games_title"))
         lay.addWidget(self.header)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -727,14 +756,15 @@ class GamesPage(QWidget):
 
     def refresh(self):
         t = self.win.t
-        self.header.sub.setText(t("games_sub", path=core.prefix_base(self.win.cfg)))
+        self.header.sub.setText(t("games_sub_win") if core.IS_WINDOWS
+                                else t("games_sub", path=core.prefix_base(self.win.cfg)))
         inner = QWidget()
         col = QVBoxLayout(inner)
         col.setContentsMargins(0, 0, 8, 0)
         col.setSpacing(14)
         prefixes = core.list_prefixes(self.win.cfg)
         if not prefixes:
-            e = label(t("games_empty"), "Sub", wrap=True)
+            e = label(t("games_empty_win" if core.IS_WINDOWS else "games_empty"), "Sub", wrap=True)
             e.setAlignment(Qt.AlignCenter)
             col.addStretch(1)
             col.addWidget(e)
@@ -832,6 +862,7 @@ class SettingsPage(QWidget):
         r.addWidget(ch)
         pl.addLayout(r)
         lay.addWidget(pro)
+        pro.setVisible(not core.IS_WINDOWS)
         lay.addStretch(1)
 
     def _card(self, title: str, icon: str):
@@ -979,7 +1010,7 @@ class MainWindow(QMainWindow):
         self.build()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(2000)
+        self.timer.start(5000 if core.IS_WINDOWS else 2000)
         self.refresh(force=True)
         if check_updates and cfg.get("auto_update", True):
             QTimer.singleShot(1200, lambda: self.check_updates(manual=False))
@@ -1011,7 +1042,8 @@ class MainWindow(QMainWindow):
         sl.addLayout(logo)
         sl.addSpacing(22)
         self.nav = []
-        for i, (key, icon) in enumerate((("nav_isos", "disc"), ("nav_games", "game"),
+        games_key = "games_title_win" if core.IS_WINDOWS else "nav_games"
+        for i, (key, icon) in enumerate((("nav_isos", "disc"), (games_key, "game"),
                                          ("nav_settings", "gear"), ("nav_about", "info"))):
             b = button(t(key), icon)
             b.setObjectName("NavButton")
@@ -1060,10 +1092,30 @@ class MainWindow(QMainWindow):
 
     # ----- state ------------------------------------------------------------------
     def refresh(self, force: bool = False):
+        if core.IS_WINDOWS and not os.environ.get("ISOMT_DEMO_WIN"):
+            # PowerShell is slow – query in the background, never block the window
+            if getattr(self, "_refreshing", False):
+                return
+            self._refreshing = True
+            task = Task(core.current_isos, parent=self)
+
+            def done(res, exc):
+                self._refreshing = False
+                if task in self.tasks:
+                    self.tasks.remove(task)
+                self._apply_isos(res if isinstance(res, list) else [], force)
+
+            task.done.connect(done)
+            self.tasks.append(task)
+            task.start()
+            return
         try:
             isos = core.current_isos()
         except Exception:  # noqa: BLE001
             isos = []
+        self._apply_isos(isos, force)
+
+    def _apply_isos(self, isos, force=False):
         state = tuple((m.loop, m.iso, tuple(m.mountpoints), m.slot) for m in isos)
         if force or state != self._iso_state:
             self._iso_state = state
@@ -1198,9 +1250,9 @@ class MainWindow(QMainWindow):
         return core.pick_proton(self.protons, choice or "auto")
 
     def install_dialog(self, iso: core.IsoMount):
-        if not self.protons:
+        if not self.protons and not core.IS_WINDOWS:
             self.protons = core.find_protons()
-        if not self.protons:
+        if not self.protons and not core.IS_WINDOWS:
             self.error(self.t("err_no_proton"))
             return
         dlg = LaunchDialog(self, iso=iso)
@@ -1211,6 +1263,14 @@ class MainWindow(QMainWindow):
         self._run(v["exe"], prefix, self._tool(v["proton"]), v["options"], v["runtime"], from_iso=True)
 
     def pick_and_run_in_prefix(self, prefix: core.Prefix):
+        if core.IS_WINDOWS:              # Windows: just remember the game's .exe for "Play"
+            start = os.environ.get("ProgramFiles", "C:\\Program Files")
+            exe, _ = QFileDialog.getOpenFileName(self, self.t("pick_game_exe"), start, "Windows (*.exe *.EXE);;* (*)")
+            if exe:
+                prefix.meta["last_exe"] = exe
+                prefix.save_meta()
+                self.games_page.refresh()
+            return
         if not self.protons:
             self.error(self.t("err_no_proton"))
             return
@@ -1229,7 +1289,7 @@ class MainWindow(QMainWindow):
         if not exe or not os.path.isfile(exe):
             return
         tool = self._tool(prefix.meta.get("proton_path") or self.cfg.get("proton", "auto"))
-        if not tool:
+        if not tool and not core.IS_WINDOWS:
             self.error(self.t("err_no_proton"))
             return
         self._run(exe, prefix, tool, self.cfg.get("launch_options", core.DEFAULT_LAUNCH_OPTIONS),
@@ -1264,7 +1324,8 @@ class MainWindow(QMainWindow):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Information)
         box.setWindowTitle(t("finished_title"))
-        box.setText(t("finished_text", exe=exe_name, code=code) if from_iso else t("st_finished", exe=exe_name))
+        fin = "finished_text_win" if core.IS_WINDOWS else "finished_text"
+        box.setText(t(fin, exe=exe_name, code=code) if from_iso else t("st_finished", exe=exe_name))
         games = box.addButton(t("btn_show_games"), QMessageBox.AcceptRole) if from_iso else None
         logb = box.addButton(t("btn_open_log"), QMessageBox.ActionRole)
         box.addButton(t("ok"), QMessageBox.RejectRole)
@@ -1282,7 +1343,8 @@ class MainWindow(QMainWindow):
         t = self.t
         exe = prefix.meta.get("last_exe", "")
         if not exe or not os.path.isfile(exe):
-            start = prefix.drive_c if os.path.isdir(prefix.drive_c) else prefix.path
+            start = (os.environ.get("ProgramFiles", "C:\\") if core.IS_WINDOWS else
+                     prefix.drive_c if os.path.isdir(prefix.drive_c) else prefix.path)
             exe, _ = QFileDialog.getOpenFileName(self, t("pick_game_first"), start,
                                                  "Windows (*.exe *.EXE *.bat);;* (*)")
             if not exe:
@@ -1302,7 +1364,9 @@ class MainWindow(QMainWindow):
         self.games_page.refresh()
 
     def delete_prefix(self, prefix: core.Prefix):
-        if not self.ask(self.t("confirm_delete", name=prefix.name, path=prefix.path)):
+        q = (self.t("confirm_remove_win", name=prefix.name) if core.IS_WINDOWS
+             else self.t("confirm_delete", name=prefix.name, path=prefix.path))
+        if not self.ask(q):
             return
         try:
             core.delete_prefix(prefix)
@@ -1353,7 +1417,10 @@ class MainWindow(QMainWindow):
                 self.error(self.t("upd_fail_dl"))
                 return
             QMessageBox.information(self, core.APP_NAME, self.t("upd_done", v=info["version"]))
-            subprocess.Popen([target, "--no-update-check"], env=core.clean_env(), start_new_session=True)
+            if core.IS_WINDOWS:
+                subprocess.Popen([target, "--no-update-check"], env=core.clean_env())
+            else:
+                subprocess.Popen([target, "--no-update-check"], env=core.clean_env(), start_new_session=True)
             QApplication.instance().quit()
 
         self._start_task(core.download_update, info["url"], target, done=done)
@@ -1400,7 +1467,14 @@ def make_app() -> QApplication:
 
 
 def run(cfg: core.Config, check_updates: bool = True) -> int:
-    _prepare_qt_env()
+    if core.IS_WINDOWS:
+        if getattr(sys, "frozen", False):
+            try:
+                os.remove(sys.executable + ".old")       # left over from a self-update
+            except OSError:
+                pass
+    else:
+        _prepare_qt_env()
     app = make_app()
     win = MainWindow(cfg, check_updates)
     win.show()
@@ -1443,7 +1517,8 @@ def make_screenshots(out_dir: str) -> int:
             snap(dlg, f"{lang}_2_launch")
             dlg.close()
             r = GameRunner(win.t, cfg, os.path.join(win.isos[0].mountpoint, "SETUP.EXE"),
-                           core.get_prefix(cfg, "Need for Speed"), win.protons[0], "", True, True)
+                           core.get_prefix(cfg, "Need for Speed"), win.protons[0] if win.protons else None,
+                           "", True, True)
             r.status_text = win.t("st_running", exe="SETUP.EXE", name="Need for Speed")
             win.runners.append(r)
             win._update_running()
@@ -1459,6 +1534,8 @@ def make_screenshots(out_dir: str) -> int:
             upd.close()
             win.close()
         # empty state
+        with open(os.environ["ISOMT_DEMO_WIN"], "w", encoding="utf-8") as f:
+            f.write("[]")
         for d in os.listdir(os.environ["ISOMOUNT_SYSBLOCK"]):
             import shutil
             shutil.rmtree(os.path.join(os.environ["ISOMOUNT_SYSBLOCK"], d))

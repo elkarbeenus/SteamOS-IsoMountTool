@@ -1,5 +1,6 @@
 """Unit tests for the core logic (no Qt needed). Run: python3 -m unittest discover -s tests"""
 
+import json
 import os
 import sys
 import tempfile
@@ -294,6 +295,79 @@ esac
         m2 = core.mount_iso(os.path.join(self.dl, "e.iso"))
         self.assertEqual(m2.drive_letter, "D")
         self.assertEqual(os.readlink(os.path.join(core.drives_dir(), "d")), m2.mountpoint)
+
+
+class WindowsLogicTests(unittest.TestCase):
+    """Windows code paths, simulated on Linux (PowerShell calls are faked)."""
+
+    def setUp(self):
+        self._env = dict(os.environ)
+        self.tmp = tempfile.TemporaryDirectory()
+        core.IS_WINDOWS = True
+        self.env = demo.create_demo_env(self.tmp.name)
+        self.calls = []
+        self._run = core.run
+
+        def fake_run(cmd, timeout=60, extra_env=None):
+            script = cmd[-1]
+            self.calls.append((script, extra_env or {}))
+            if "Mount-DiskImage" in script:
+                path = extra_env["ISOMT_PATH"]
+                with open(self.env["ISOMT_DEMO_WIN"]) as f:
+                    rows = json.load(f)
+                rows.append({"image": path, "letter": "H", "mount": self.tmp.name})
+                with open(self.env["ISOMT_DEMO_WIN"], "w") as f:
+                    json.dump(rows, f)
+                return 0, "LETTER=H\n"
+            if "Dismount-DiskImage" in script:
+                with open(self.env["ISOMT_DEMO_WIN"]) as f:
+                    rows = [r for r in json.load(f) if r["image"] != extra_env["ISOMT_PATH"]]
+                with open(self.env["ISOMT_DEMO_WIN"], "w") as f:
+                    json.dump(rows, f)
+                return 0, "OK"
+            return 1, ""
+
+        core.run = fake_run
+
+    def tearDown(self):
+        core.IS_WINDOWS = False
+        core.run = self._run
+        os.environ.clear()
+        os.environ.update(self._env)
+        self.tmp.cleanup()
+
+    def test_paths(self):
+        self.assertTrue(core.config_dir().startswith(self.env["APPDATA"]))
+        self.assertTrue(core.data_dir().startswith(self.env["LOCALAPPDATA"]))
+        self.assertTrue(core.lakuen_dir().startswith(self.env["APPDATA"]))
+        self.assertTrue(core.prefix_base({}).startswith(self.env["LOCALAPPDATA"]))
+
+    def test_list_mount_eject(self):
+        isos = core.current_isos()
+        self.assertEqual([(m.slot, m.drive_letter, m.label) for m in isos],
+                         [(0, "D", "Need for Speed Disc 1"), (1, "E", "Anno 1602")])
+        self.assertTrue(core.find_installers(isos[0].mountpoint))
+        new = os.path.join(self.env["HOME"], "Downloads", "x.iso")
+        open(new, "w").close()
+        m = core.mount_iso(new)
+        self.assertEqual((m.drive_letter, m.slot), ("H", 2))
+        self.assertEqual(self.calls[-1][1]["ISOMT_PATH"], new)
+        with self.assertRaises(core.AlreadyMounted):
+            core.mount_iso(new)
+        core.eject(m.loop)
+        self.assertEqual(len(core.current_isos()), 2)
+
+    def test_games_and_lakuen_export(self):
+        cfg = core.Config()
+        names = [p.name for p in core.list_prefixes(cfg)]
+        self.assertEqual(names, ["Anno 1602", "Need for Speed"])
+        prefix = core.get_prefix(cfg, "Need for Speed")
+        os.makedirs(core.lakuen_dir())
+        os.environ["ISOMT_PROC"] = os.path.join(self.tmp.name, "noproc")
+        core.export_to_lakuen(prefix, prefix.meta["last_exe"], prefix.name, core.DEFAULT_LAUNCH_OPTIONS, "/x")
+        with open(os.path.join(core.lakuen_dir(), "library.json")) as f:
+            g = json.load(f)["games"][0]
+        self.assertEqual((g["runner"], g["proton"], g["prefix"], g["env"]), ("default", "default", "", {}))
 
 
 if __name__ == "__main__":

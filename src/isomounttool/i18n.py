@@ -92,6 +92,23 @@ STRINGS = {
     "err_lakuen_write": ("Die Bibliothek des LakuenLaunchers konnte nicht gespeichert werden.", "LakuenLauncher's library could not be saved."),
     "pick_game_first": ("Wähle die .exe des installierten Spiels aus", "Choose the .exe of the installed game"),
 
+    # Windows
+    "st_running_win": ("{exe} läuft", "{exe} is running"),
+    "launch_game": ("Spiel", "Game"),
+    "launch_game_hint": ("Unter diesem Namen erscheint das Spiel danach in „Spiele“.", "The game will be listed under this name in “Games”."),
+    "games_title_win": ("Spiele", "Games"),
+    "games_sub_win": ("Spiele, die du über das Tool installiert hast", "Games you installed with the tool"),
+    "games_empty_win": ("Noch keine Spiele. Starte einen Installer von einer ISO – das Spiel erscheint dann hier.",
+                        "No games yet. Run an installer from an ISO – the game will show up here."),
+    "game_no_exe_win": ("Noch keine Spiel-.exe gewählt – „Spiel-.exe wählen…“ klicken.", "No game .exe chosen yet – click “Choose game .exe…”."),
+    "btn_choose_exe": ("Spiel-.exe wählen…", "Choose game .exe…"),
+    "btn_open_folder": ("Ordner öffnen", "Open folder"),
+    "btn_remove": ("Entfernen", "Remove"),
+    "confirm_remove_win": ("„{name}“ aus der Liste entfernen?\n\nDas installierte Spiel bleibt erhalten.",
+                           "Remove “{name}” from the list?\n\nThe installed game is not touched."),
+    "finished_text_win": ("„{exe}“ wurde beendet (Code {code}).\n\nIm Bereich „Spiele“ kannst du jetzt einmal die Spiel-.exe wählen und es danach mit „Spielen“ starten.",
+                          "“{exe}” has exited (code {code}).\n\nIn “Games” you can now choose the game's .exe once and then start it with “Play”."),
+
     # settings
     "set_title": ("Einstellungen", "Settings"),
     "set_language": ("Sprache", "Language"),

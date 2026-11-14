@@ -3,3 +3,7 @@ dist/
 *.AppImage
 __pycache__/
 shots/
+shots-win/
+src/isomounttool/VERSION
+src/isomounttool/icon.svg
+*.spec

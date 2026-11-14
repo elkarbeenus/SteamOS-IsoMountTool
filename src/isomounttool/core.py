@@ -12,6 +12,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -25,6 +26,8 @@ MAX_ISOS = 4
 DRIVE_LETTERS = ["d", "e", "f", "g"]          # slot 1..4 -> D: .. G: inside Proton prefixes
 DEFAULT_LAUNCH_OPTIONS = "WINE_LARGE_ADDRESS_AWARE=1 %command%"
 PREFIX_META = "isomounttool.json"
+IS_WINDOWS = sys.platform == "win32"
+_NO_WINDOW = 0x08000000                       # CREATE_NO_WINDOW (Windows)
 
 
 # =============================================================================
@@ -51,10 +54,14 @@ def home() -> str:
 
 
 def config_dir() -> str:
+    if IS_WINDOWS:
+        return os.path.join(os.environ.get("APPDATA") or os.path.join(home(), "AppData", "Roaming"), APP_ID)
     return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(home(), ".config"), APP_ID)
 
 
 def data_dir() -> str:
+    if IS_WINDOWS:
+        return os.path.join(os.environ.get("LOCALAPPDATA") or os.path.join(home(), "AppData", "Local"), APP_ID)
     return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(home(), ".local", "share"), APP_ID)
 
 
@@ -156,10 +163,15 @@ def clean_env(extra: dict | None = None) -> dict:
     return env
 
 
-def run(cmd: list[str], timeout: float | None = 60) -> tuple[int, str]:
+def _popen_kwargs() -> dict:
+    return {"creationflags": _NO_WINDOW} if IS_WINDOWS else {}
+
+
+def run(cmd: list[str], timeout: float | None = 60, extra_env: dict | None = None) -> tuple[int, str]:
     try:
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                           env=clean_env(), timeout=timeout)
+                           encoding="utf-8", errors="replace",
+                           env=clean_env(extra_env), timeout=timeout, **_popen_kwargs())
         return p.returncode, p.stdout or ""
     except FileNotFoundError:
         return 127, f"{cmd[0]}: not found"
@@ -168,6 +180,12 @@ def run(cmd: list[str], timeout: float | None = 60) -> tuple[int, str]:
 
 
 def open_path(path: str):
+    if IS_WINDOWS:
+        try:
+            os.startfile(path)  # noqa: S606  (Windows only)
+            return True
+        except OSError:
+            return False
     for opener in ("xdg-open", "dolphin", "nautilus"):
         if shutil.which(opener):
             subprocess.Popen([opener, path], env=clean_env(), stdout=subprocess.DEVNULL,
@@ -252,6 +270,7 @@ class IsoMount:
     iso: str
     mountpoints: list[str] = field(default_factory=list)
     slot: int = -1
+    win_letter: str = ""          # real drive letter on Windows
 
     @property
     def name(self) -> str:
@@ -264,10 +283,14 @@ class IsoMount:
     @property
     def label(self) -> str:
         mp = self.mountpoint
-        return os.path.basename(mp.rstrip("/")) if mp else os.path.splitext(self.name)[0]
+        if self.win_letter or not mp:
+            return os.path.splitext(self.name)[0]
+        return os.path.basename(mp.rstrip("/")) or os.path.splitext(self.name)[0]
 
     @property
     def drive_letter(self) -> str:
+        if self.win_letter:
+            return self.win_letter.upper()
         return DRIVE_LETTERS[self.slot].upper() if 0 <= self.slot < len(DRIVE_LETTERS) else ""
 
 
@@ -296,7 +319,10 @@ def _save_slots(slots: dict[int, str]):
 
 def current_isos(preferred: dict[str, int] | None = None) -> list[IsoMount]:
     """All mounted ISOs with their slot. Keeps slot positions stable between calls."""
-    isos = [IsoMount(loop, iso, mountpoints_of(loop)) for loop, iso in list_iso_loops()]
+    if IS_WINDOWS:
+        isos = [IsoMount(img, img, [mnt], win_letter=letter) for img, letter, mnt in win_list_images()]
+    else:
+        isos = [IsoMount(loop, iso, mountpoints_of(loop)) for loop, iso in list_iso_loops()]
     slots = _load_slots()
     present = {m.iso for m in isos}
     new_slots = {s: p for s, p in slots.items() if p in present and 0 <= s < MAX_ISOS}
@@ -316,8 +342,63 @@ def current_isos(preferred: dict[str, int] | None = None) -> list[IsoMount]:
         new_slots[s] = m.iso
     if new_slots != slots:
         _save_slots(new_slots)
-    sync_drive_links(isos)
+    if not IS_WINDOWS:
+        sync_drive_links(isos)
     return isos
+
+
+# --- Windows: built-in ISO mounting (Mount-DiskImage) --------------------------
+_PS_LIST = r"""$ErrorActionPreference = 'SilentlyContinue'
+$r = @(Get-Volume | Where-Object { $_.DriveType -eq 'CD-ROM' -and $_.DriveLetter } | ForEach-Object {
+  $img = Get-DiskImage -Volume $_
+  if ($img -and $img.ImagePath) { [pscustomobject]@{ image = [string]$img.ImagePath; letter = [string]$_.DriveLetter } }
+})
+ConvertTo-Json -InputObject $r -Compress"""
+
+_PS_MOUNT = r"""$ErrorActionPreference = 'Stop'
+$img = Mount-DiskImage -ImagePath $env:ISOMT_PATH -StorageType ISO -PassThru
+$letter = ''
+for ($i = 0; $i -lt 20 -and -not $letter; $i++) {
+  Start-Sleep -Milliseconds 250
+  $letter = [string](Get-DiskImage -ImagePath $env:ISOMT_PATH | Get-Volume).DriveLetter
+}
+Write-Output "LETTER=$letter" """
+
+_PS_EJECT = r"""$ErrorActionPreference = 'Stop'
+Dismount-DiskImage -ImagePath $env:ISOMT_PATH | Out-Null
+Write-Output 'OK'"""
+
+
+def powershell(script: str, extra_env: dict | None = None, timeout: float | None = 60) -> tuple[int, str]:
+    return run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-Command", script], timeout=timeout, extra_env=extra_env)
+
+
+def win_list_images() -> list[tuple[str, str, str]]:
+    """[(iso path, drive letter, mount path)] of mounted ISO images on Windows."""
+    demo = os.environ.get("ISOMT_DEMO_WIN")
+    if demo:
+        try:
+            with open(demo, encoding="utf-8") as f:
+                rows = json.load(f)
+        except (OSError, ValueError):
+            rows = []
+    else:
+        rc, out = powershell(_PS_LIST, timeout=30)
+        try:
+            rows = json.loads(out.strip() or "[]") if rc == 0 else []
+        except ValueError:
+            rows = []
+        if isinstance(rows, dict):
+            rows = [rows]
+    result = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        img, letter = str(r.get("image", "")), str(r.get("letter", "")).strip(":")
+        if img.lower().endswith(".iso") and letter:
+            result.append((img, letter.upper(), r.get("mount") or f"{letter.upper()}:\\"))
+    return result
 
 
 def sync_drive_links(isos: list[IsoMount]):
@@ -362,7 +443,7 @@ class AlreadyMounted(MountError):
 
 
 def udisks_available() -> bool:
-    return shutil.which("udisksctl") is not None
+    return IS_WINDOWS or shutil.which("udisksctl") is not None
 
 
 def mount_iso(path: str, slot: int | None = None) -> IsoMount:
@@ -373,6 +454,8 @@ def mount_iso(path: str, slot: int | None = None) -> IsoMount:
     iso = os.path.realpath(path)
     if not iso.lower().endswith(".iso"):
         raise MountError("err_not_iso", path=iso)
+    if IS_WINDOWS:
+        return _mount_iso_windows(iso, slot)
     loops = list_iso_loops()
     for loop, bf in loops:
         if bf == iso:
@@ -416,7 +499,31 @@ def mount_iso(path: str, slot: int | None = None) -> IsoMount:
     return IsoMount(loop, iso, mountpoints_of(loop))
 
 
+def _mount_iso_windows(iso: str, slot: int | None) -> IsoMount:
+    images = win_list_images()
+    if any(os.path.normcase(img) == os.path.normcase(iso) for img, _, _ in images):
+        raise AlreadyMounted("err_already", path=iso)
+    if len(images) >= MAX_ISOS:
+        raise MountError("err_limit", max=MAX_ISOS)
+    rc, out = powershell(_PS_MOUNT, {"ISOMT_PATH": iso}, timeout=90)
+    m = re.search(r"LETTER=([A-Za-z])", out)
+    if rc != 0 or not m:
+        raise MountError("err_mount", out)
+    preferred = {iso: slot} if slot is not None else None
+    for mnt in current_isos(preferred):
+        if os.path.normcase(mnt.iso) == os.path.normcase(iso):
+            return mnt
+    letter = m.group(1).upper()
+    return IsoMount(iso, iso, [f"{letter}:\\"], win_letter=letter)
+
+
 def eject(loop: str):
+    if IS_WINDOWS:                         # on Windows `loop` is the ISO path
+        rc, out = powershell(_PS_EJECT, {"ISOMT_PATH": loop}, timeout=60)
+        current_isos()
+        if rc != 0:
+            raise MountError("err_eject", out)
+        return
     errors = ""
     for src in mount_sources_of(loop):
         rc, out = run(["udisksctl", "unmount", "--block-device", src])
@@ -661,6 +768,8 @@ def runtime_for(tool: ProtonTool) -> str:
 #  Prefixes (one Wine/Proton prefix per game)
 # =============================================================================
 def prefix_base(cfg: dict) -> str:
+    if IS_WINDOWS:                         # no prefixes on Windows: just the tool's game list
+        return os.path.join(data_dir(), "games")
     return cfg.get("prefix_base") or os.path.join(home(), "Games", "IsoMountTool")
 
 
@@ -930,6 +1039,26 @@ def init_command(prefix: Prefix, tool: ProtonTool, cfg: dict, use_runtime: bool 
     return cmd, env, prefix.path
 
 
+def run_windows_program(exe: str, args: list[str], log) -> int:
+    """Runs an installer/game on Windows and waits for it. Asks for admin rights (UAC) if needed."""
+    cwd = os.path.dirname(exe) or None
+    try:
+        return subprocess.run([exe] + args, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
+                              env=clean_env()).returncode
+    except OSError as e:
+        if getattr(e, "winerror", 0) != 740:          # 740 = elevation required
+            raise
+    log.write("Program needs administrator rights – asking via UAC\n")
+    log.flush()
+    script = ("$a = @{ FilePath = $env:ISOMT_PATH; WorkingDirectory = $env:ISOMT_CWD; Verb = 'RunAs'; "
+              "Wait = $true; PassThru = $true }; if ($env:ISOMT_ARGS) { $a.ArgumentList = $env:ISOMT_ARGS }; "
+              "$p = Start-Process @a; exit $p.ExitCode")
+    rc, out = powershell(script, {"ISOMT_PATH": exe, "ISOMT_CWD": cwd or home(),
+                                  "ISOMT_ARGS": subprocess.list2cmdline(args) if args else ""}, timeout=None)
+    log.write(out)
+    return rc
+
+
 # =============================================================================
 #  Updates
 # =============================================================================
@@ -972,8 +1101,9 @@ def fetch_latest_release(timeout: int = 8) -> dict | None:
     if not tag:
         return None
     url = ""
+    want = ".exe" if IS_WINDOWS else ".AppImage"
     for a in d.get("assets") or []:
-        if str(a.get("name", "")).endswith(".AppImage"):
+        if str(a.get("name", "")).endswith(want):
             url = a.get("browser_download_url", "")
             break
     return {"tag": tag, "version": tag.lstrip("vV"), "url": url, "notes": d.get("body") or "",
@@ -981,7 +1111,10 @@ def fetch_latest_release(timeout: int = 8) -> dict | None:
 
 
 def can_self_update() -> str:
-    """Path of the running AppImage if it can be replaced, else ''."""
+    """Path of the running AppImage (Linux) or .exe (Windows) if it can be replaced, else ''."""
+    if IS_WINDOWS:
+        exe = sys.executable if getattr(sys, "frozen", False) else ""
+        return exe if exe and os.access(os.path.dirname(exe), os.W_OK) else ""
     target = os.environ.get("APPIMAGE", "")
     if target and os.path.isfile(target) and os.access(target, os.W_OK) and \
             os.access(os.path.dirname(target), os.W_OK):
@@ -1006,9 +1139,16 @@ def download_update(url: str, target: str) -> bool:
     try:
         if ok:
             with open(tmp, "rb") as f:
-                ok = f.read(4) == b"\x7fELF"
+                head = f.read(4)
+            ok = head[:2] == b"MZ" if IS_WINDOWS else head == b"\x7fELF"
         if ok:
-            os.chmod(tmp, 0o755)
+            if IS_WINDOWS:
+                old = target + ".old"          # a running .exe can be renamed, not overwritten
+                if os.path.exists(old):
+                    os.remove(old)
+                os.replace(target, old)
+            else:
+                os.chmod(tmp, 0o755)
             os.replace(tmp, target)
             return True
     except OSError:
@@ -1027,8 +1167,11 @@ LAKUEN_ID = "de.lakuen.launcher"
 
 
 def lakuen_dir() -> str:
-    return os.environ.get("ISOMT_LAKUEN_DIR") or os.path.join(
-        os.environ.get("XDG_DATA_HOME") or os.path.join(home(), ".local", "share"), LAKUEN_ID)
+    if os.environ.get("ISOMT_LAKUEN_DIR"):
+        return os.environ["ISOMT_LAKUEN_DIR"]
+    if IS_WINDOWS:
+        return os.path.join(os.environ.get("APPDATA") or os.path.join(home(), "AppData", "Roaming"), LAKUEN_ID)
+    return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(home(), ".local", "share"), LAKUEN_ID)
 
 
 def lakuen_installed() -> bool:
@@ -1037,6 +1180,9 @@ def lakuen_installed() -> bool:
 
 def lakuen_running() -> bool:
     """True if a LakuenLauncher process is running (it would overwrite library.json on its next save)."""
+    if IS_WINDOWS and not os.environ.get("ISOMT_PROC"):
+        rc, out = run(["tasklist", "/FO", "CSV", "/NH"], timeout=20)
+        return rc == 0 and "lakuenlauncher" in out.lower()
     proc = os.environ.get("ISOMT_PROC", "/proc")
     me = str(os.getpid())
     try:
@@ -1090,6 +1236,8 @@ def export_to_lakuen(prefix: Prefix, exe: str, name: str, launch_options: str,
             pass
 
     env, wrapper, args = parse_launch_options(launch_options)
+    if IS_WINDOWS:                          # games run natively on Windows
+        env, wrapper = {}, []
     fields = {
         "name": name,
         "path": exe,
@@ -1097,9 +1245,9 @@ def export_to_lakuen(prefix: Prefix, exe: str, name: str, launch_options: str,
         "args": " ".join(shlex.quote(a) for a in args),
         "workdir": os.path.dirname(exe),
         "env": env,
-        "runner": "slr" if use_runtime else "proton",
-        "proton": proton_path or "default",
-        "prefix": prefix.path,
+        "runner": "default" if IS_WINDOWS else ("slr" if use_runtime else "proton"),
+        "proton": "default" if IS_WINDOWS else (proton_path or "default"),
+        "prefix": "" if IS_WINDOWS else prefix.path,
         "wrapper": " ".join(shlex.quote(w) for w in wrapper),
     }
     existing = None

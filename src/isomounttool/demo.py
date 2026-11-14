@@ -3,6 +3,7 @@
 Created by Dominic Lesina x Claude
 """
 
+import json
 import os
 
 
@@ -62,7 +63,26 @@ def create_demo_env(base: str, isos=(("Need for Speed Disc 1.iso", "NFS_DISC1"),
             meta += ', "proton": "GE-Proton10-25"}'
             _w(os.path.join(d, "isomounttool.json"), meta)
 
+    from . import core
+    win_rows = []
+    for i, (iso_name, label) in enumerate(isos):
+        win_rows.append({"image": os.path.join(home, "Downloads", iso_name), "letter": "DEFG"[i],
+                         "mount": os.path.join(media, label)})
+    _w(os.path.join(base, "win-images.json"), json.dumps(win_rows))
+    if core.IS_WINDOWS and with_prefix:
+        games = os.path.join(base, "localappdata", core.APP_ID, "games")
+        for name, exe in (("Need for Speed", "Program Files/EA Games/NFS/nfs.exe"), ("Anno 1602", "")):
+            meta = {"name": name}
+            if exe:
+                full = os.path.join(base, "C", exe)
+                _w(full, "MZ")
+                meta["last_exe"] = full
+            _w(os.path.join(games, name, "isomounttool.json"), json.dumps(meta))
+
     env = {
+        "APPDATA": os.path.join(base, "appdata"),
+        "LOCALAPPDATA": os.path.join(base, "localappdata"),
+        "ISOMT_DEMO_WIN": os.path.join(base, "win-images.json"),
         "HOME": home,
         "XDG_CONFIG_HOME": os.path.join(home, ".config"),
         "XDG_DATA_HOME": os.path.join(home, ".local", "share"),
